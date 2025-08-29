@@ -1,0 +1,37 @@
+[package]
+name = "tailwind-extractor"
+version = "0.1.0"
+edition = "2021"
+authors = ["CapitalMadrid Development Team"]
+description = "Standalone CLI tool for extracting Tailwind CSS classes from compiled ReScript files"
+license = "MIT"
+
+[[bin]]
+name = "tailwind-extractor-cli"
+path = "src/main.rs"
+
+[dependencies]
+swc_core = { version = "37.0.0", features = ["ecma_parser", "ecma_ast", "ecma_visit", "common"] }
+tailwind-rs = { path = "../../vendor/tailwind-rs/projects/tailwind-rs" }
+clap = { version = "4.0", features = ["derive", "env"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+glob = "0.3"
+rayon = "1.10"
+anyhow = "1.0"
+thiserror = "2.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "process"] }
+indicatif = "0.17"
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3.0"
+insta = "1.0"
+regex = "1.10"
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio-test = "0.4"
+
+[[bench]]
+name = "extraction_benchmark"
+harness = false

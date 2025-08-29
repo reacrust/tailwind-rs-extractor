@@ -1,0 +1,36 @@
+{
+  "name": "@capitalmadrid/tailwind-extractor-plugin",
+  "version": "0.1.0",
+  "description": "RSpack plugin for Tailwind CSS extraction using the tailwind-extractor-cli tool",
+  "main": "tailwind-extractor-plugin.js",
+  "keywords": [
+    "rspack",
+    "plugin",
+    "tailwind",
+    "css",
+    "extraction",
+    "rescript",
+    "build-tool"
+  ],
+  "author": "CapitalMadrid",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "peerDependencies": {
+    "@rspack/core": "^1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capitalmadrid/capitalmadrid.git",
+    "directory": "crates/tailwind-extractor/rspack-plugin"
+  },
+  "bugs": {
+    "url": "https://github.com/capitalmadrid/capitalmadrid/issues"
+  },
+  "homepage": "https://github.com/capitalmadrid/capitalmadrid#readme",
+  "files": [
+    "tailwind-extractor-plugin.js",
+    "README.md"
+  ]
+}
