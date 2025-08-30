@@ -1,5 +1,5 @@
 use clap::Parser;
-use tailwind_extractor::{Cli, Commands, extract, handle_pipe_command};
+use tailwind_extractor::{Cli, Commands, extract, handle_pipe_command, transform_files};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -9,17 +9,30 @@ async fn main() -> anyhow::Result<()> {
     // Handle commands
     match cli.command {
         Commands::Extract(args) => {
-            // Run the extraction
-            match extract(args).await {
-                Ok(result) => {
-                    println!("Extraction successful!");
-                    println!("  - Processed {} files", result.total_files_processed);
-                    println!("  - Extracted {} unique classes", result.total_classes);
-                    Ok(())
+            if args.transform {
+                // Run transformation mode
+                match transform_files(args).await {
+                    Ok(()) => {
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
                 }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
+            } else {
+                // Run the extraction
+                match extract(args).await {
+                    Ok(result) => {
+                        println!("Extraction successful!");
+                        println!("  - Processed {} files", result.total_files_processed);
+                        println!("  - Extracted {} unique classes", result.total_classes);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
                 }
             }
         }

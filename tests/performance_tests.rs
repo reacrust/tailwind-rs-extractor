@@ -39,6 +39,8 @@ async fn test_performance_1000_files_under_10_seconds() {
         jobs: Some(8), // Use parallel processing
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     let start = Instant::now();
@@ -84,6 +86,8 @@ async fn test_performance_stats_accuracy() {
         jobs: Some(4),
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     let result = extract(args).await.unwrap();
@@ -129,6 +133,8 @@ async fn test_early_termination_empty_files() {
         jobs: Some(4),
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     let start = Instant::now();
@@ -173,6 +179,8 @@ async fn test_memory_efficient_deduplication() {
         jobs: Some(4),
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     let result = extract(args).await.unwrap();
@@ -216,6 +224,8 @@ async fn test_parallel_vs_sequential_performance() {
         jobs: Some(1),
         exclude: vec![],
         dry_run: true,
+        no_preflight: false,
+        transform: false,
     };
     
     let start_single = Instant::now();
@@ -235,6 +245,8 @@ async fn test_parallel_vs_sequential_performance() {
         jobs: Some(4),
         exclude: vec![],
         dry_run: true,
+        no_preflight: false,
+        transform: false,
     };
     
     let start_multi = Instant::now();

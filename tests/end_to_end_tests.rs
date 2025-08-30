@@ -59,6 +59,8 @@ async fn test_end_to_end_css_generation() {
         verbose: false,
         dry_run: false,
         jobs: None,
+        no_preflight: false,
+        transform: false,
     };
     
     // Run extraction
@@ -110,6 +112,8 @@ async fn test_minification() {
         verbose: false,
         dry_run: false,
         jobs: None,
+        no_preflight: false,
+        transform: false,
     };
     
     // Run extraction

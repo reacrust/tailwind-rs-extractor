@@ -29,6 +29,8 @@ class TailwindExtractorPlugin {
    * @param {Array<string>} [options.exclude] - Patterns to exclude from scanning
    * @param {boolean} [options.dryRun=false] - Perform extraction but don't write output files
    * @param {boolean} [options.preflight=true] - Enable generation of Tailwind preflight/reset CSS
+   * @param {boolean} [options.enableTransformation=false] - Enable AST transformation of JavaScript files
+   * @param {Array<string|RegExp>} [options.transformPatterns] - Patterns to match files for transformation
    */
   constructor(options = {}) {
     // Validate required options
@@ -50,6 +52,16 @@ class TailwindExtractorPlugin {
       exclude: options.exclude || [],
       dryRun: Boolean(options.dryRun),
       preflight: options.preflight !== undefined ? Boolean(options.preflight) : true, // Default to true for backward compatibility
+      enableTransformation: Boolean(options.enableTransformation),
+      transformPatterns: options.transformPatterns || [
+        // Default patterns: transform application code, skip vendor bundles
+        /\bmain\b.*\.js$/,
+        /\bapp\b.*\.js$/,
+        /\bclient\b.*\.js$/,
+        /\bindex\b.*\.js$/,
+        // Exclude vendor chunks by default
+        { exclude: /vendor|chunk|polyfill|runtime/ }
+      ],
     };
     
     // Track cleanup handlers
@@ -67,6 +79,9 @@ class TailwindExtractorPlugin {
       // Relative to the plugin directory (same repo structure)
       path.resolve(__dirname, '../../../target/debug/tailwind-extractor-cli'),
       path.resolve(__dirname, '../../../target/release/tailwind-extractor-cli'),
+      // Alternative cargo target location
+      path.resolve(__dirname, '../../target/debug/tailwind-extractor-cli'),
+      path.resolve(__dirname, '../../target/release/tailwind-extractor-cli'),
       // In PATH
       'tailwind-extractor-cli',
     ];
@@ -191,6 +206,29 @@ class TailwindExtractorPlugin {
           // Don't throw - let build continue
         }
       });
+      
+      // Add transformation phase after CSS extraction
+      if (this.options.enableTransformation) {
+        compilation.hooks.processAssets.tapPromise({
+          name: `${pluginName}:transform`,
+          stage: webpack.Compilation.PROCESS_ASSETS_STAGE_OPTIMIZE,
+        }, async (assets) => {
+          try {
+            if (this.options.verbose) {
+              console.log(`[${pluginName}] Starting JavaScript transformation phase...`);
+            }
+            
+            await this.transformAssetsAsync(compilation, assets);
+            
+            if (this.options.verbose) {
+              console.log(`[${pluginName}] JavaScript transformation completed`);
+            }
+          } catch (error) {
+            console.error(`[${pluginName}] Warning: Transformation encountered an error:`, error.message);
+            // Don't fail the build
+          }
+        });
+      }
     });
   }
 
@@ -416,6 +454,193 @@ class TailwindExtractorPlugin {
    */
   escapeArg(arg) {
     return arg;
+  }
+  
+  /**
+   * Check if a file should be transformed based on configured patterns.
+   * 
+   * @param {string} filename - The filename to check
+   * @returns {boolean} True if the file should be transformed
+   */
+  shouldTransformFile(filename) {
+    // Check each pattern
+    for (const pattern of this.options.transformPatterns) {
+      // Handle exclusion patterns
+      if (pattern && typeof pattern === 'object' && pattern.exclude) {
+        const excludePattern = pattern.exclude;
+        if (excludePattern instanceof RegExp) {
+          if (excludePattern.test(filename)) {
+            return false; // Explicitly excluded
+          }
+        } else if (typeof excludePattern === 'string') {
+          if (filename.includes(excludePattern)) {
+            return false;
+          }
+        }
+      }
+      // Handle inclusion patterns
+      else if (pattern instanceof RegExp) {
+        if (pattern.test(filename)) {
+          return true; // Matches inclusion pattern
+        }
+      } else if (typeof pattern === 'string') {
+        if (filename.includes(pattern)) {
+          return true;
+        }
+      }
+    }
+    
+    // If no patterns matched and we have patterns defined, don't transform
+    return this.options.transformPatterns.length === 0;
+  }
+  
+  /**
+   * Transform JavaScript assets using the tailwind-extractor-cli.
+   * 
+   * @param {Object} compilation - Webpack compilation object
+   * @param {Object} assets - Compilation assets
+   */
+  async transformAssetsAsync(compilation, assets) {
+    // Get webpack from compilation context
+    const webpack = compilation.compiler.webpack || require('@rspack/core');
+    const { RawSource } = webpack.sources;
+    
+    // Find JavaScript assets to transform
+    const jsAssets = Object.keys(assets).filter(name => {
+      // Only transform JavaScript files
+      if (!name.endsWith('.js') && !name.endsWith('.mjs')) {
+        return false;
+      }
+      
+      // Check if this file should be transformed
+      return this.shouldTransformFile(name);
+    });
+    
+    if (jsAssets.length === 0) {
+      if (this.options.verbose) {
+        console.log('[TailwindExtractorPlugin] No JavaScript assets to transform');
+      }
+      return;
+    }
+    
+    if (this.options.verbose) {
+      console.log(`[TailwindExtractorPlugin] Transforming ${jsAssets.length} JavaScript assets:`, jsAssets);
+    }
+    
+    // Transform each asset
+    const transformPromises = jsAssets.map(async (assetName) => {
+      try {
+        const asset = assets[assetName];
+        const originalSource = asset.source();
+        
+        if (!originalSource) {
+          return;
+        }
+        
+        // Transform the code using the CLI
+        const transformedCode = await this.transformViaStdin(originalSource.toString());
+        
+        if (transformedCode && transformedCode !== originalSource.toString()) {
+          // Update the asset with transformed code
+          compilation.updateAsset(assetName, new RawSource(transformedCode));
+          
+          if (this.options.verbose) {
+            console.log(`[TailwindExtractorPlugin] Transformed: ${assetName}`);
+          }
+        }
+      } catch (error) {
+        console.warn(`[TailwindExtractorPlugin] Failed to transform ${assetName}:`, error.message);
+        // Continue with other files
+      }
+    });
+    
+    // Wait for all transformations to complete
+    await Promise.all(transformPromises);
+  }
+  
+  /**
+   * Transform JavaScript code using the tailwind-extractor-cli.
+   * 
+   * @param {string} jsCode - JavaScript code to transform
+   * @returns {Promise<string>} Transformed JavaScript code
+   */
+  async transformViaStdin(jsCode) {
+    return new Promise((resolve, reject) => {
+      const args = ['pipe', '--transform'];
+      
+      if (this.options.verbose) {
+        console.log(`[TailwindExtractorPlugin] Spawning transform: ${this.options.cliPath} ${args.join(' ')}`);
+      }
+      
+      const child = spawn(this.options.cliPath, args, {
+        timeout: this.options.timeout,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+      
+      // Set up timeout handler
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+        reject(new Error(`Transformation timed out after ${this.options.timeout}ms`));
+      }, this.options.timeout);
+      
+      // Cleanup function
+      const cleanup = () => {
+        clearTimeout(timeoutId);
+        if (!child.killed) {
+          child.kill('SIGTERM');
+        }
+      };
+      
+      child.stdin.on('error', (err) => {
+        if (!timedOut) {
+          cleanup();
+          reject(new Error(`Failed to write to stdin: ${err.message}`));
+        }
+      });
+      
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      child.on('error', (err) => {
+        if (!timedOut) {
+          cleanup();
+          reject(new Error(`Failed to spawn tailwind-extractor-cli: ${err.message}`));
+        }
+      });
+      
+      child.on('close', (code) => {
+        cleanup();
+        
+        if (timedOut) {
+          return;
+        }
+        
+        if (code !== 0) {
+          // Transformation failure - return original code
+          console.warn(`[TailwindExtractorPlugin] Transformation failed (exit ${code}), preserving original code`);
+          resolve(jsCode); // Return original code on failure
+        } else {
+          if (this.options.verbose && stderr) {
+            console.log(`[TailwindExtractorPlugin] Transform output: ${stderr}`);
+          }
+          resolve(stdout || jsCode); // Return transformed code or original if empty
+        }
+      });
+      
+      // Write content and close stdin
+      child.stdin.write(jsCode);
+      child.stdin.end();
+    });
   }
 }
 

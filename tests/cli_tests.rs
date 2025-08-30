@@ -97,6 +97,8 @@ fn test_extract_args_validate() {
         jobs: None,
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     // Valid args should pass

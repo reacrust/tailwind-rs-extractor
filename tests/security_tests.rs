@@ -29,6 +29,8 @@ async fn test_file_size_limit() {
         jobs: None,
         exclude: vec![],
         dry_run: true,
+        no_preflight: false,
+        transform: false,
     };
     
     // Should succeed but skip the large file
@@ -67,6 +69,8 @@ async fn test_symlink_handling() {
         jobs: None,
         exclude: vec![],
         dry_run: true,
+        no_preflight: false,
+        transform: false,
     };
     
     // Should process only the real file (symlinks are rejected by default)
@@ -99,6 +103,8 @@ async fn test_path_traversal_protection() {
         jobs: None,
         exclude: vec![],
         dry_run: true, // Use dry-run to avoid actual write attempts
+        no_preflight: false,
+        transform: false,
     };
     
     // Should succeed with safe paths
@@ -118,6 +124,8 @@ async fn test_path_traversal_protection() {
         jobs: None,
         exclude: vec![],
         dry_run: false, // Not using dry-run to test actual path validation
+        no_preflight: false,
+        transform: false,
     };
     
     // Should fail or succeed based on working directory context
@@ -162,6 +170,8 @@ async fn test_empty_file_handling() {
         jobs: None,
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     // Should handle empty files gracefully
@@ -198,6 +208,8 @@ async fn test_malformed_javascript_handling() {
         jobs: None,
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     // Should fail due to parse error
@@ -237,6 +249,8 @@ async fn test_concurrent_file_processing_safety() {
             jobs: Some(threads),
             exclude: vec![],
             dry_run: false,
+        no_preflight: false,
+        transform: false,
         };
         
         let result = extract(args).await.unwrap();
@@ -278,6 +292,8 @@ async fn test_permission_denied_handling() {
         jobs: None,
         exclude: vec![],
         dry_run: true,
+        no_preflight: false,
+        transform: false,
     };
     
     // Should fail due to permission denied

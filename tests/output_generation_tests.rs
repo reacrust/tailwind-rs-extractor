@@ -104,6 +104,8 @@ async fn test_atomic_file_writes() {
         watch: false,
         verbose: false,
         dry_run: false,
+        no_preflight: false,
+        transform: false,
         jobs: None,
     };
     
@@ -152,6 +154,8 @@ async fn test_manifest_with_obfuscation() {
         watch: false,
         verbose: false,
         dry_run: false,
+        no_preflight: false,
+        transform: false,
         jobs: None,
     };
     
@@ -205,6 +209,8 @@ async fn test_manifest_statistics() {
         watch: false,
         verbose: false,
         dry_run: false,
+        no_preflight: false,
+        transform: false,
         jobs: None,
     };
     
@@ -257,6 +263,8 @@ async fn test_pretty_vs_compact_json() {
         watch: false,
         verbose: false,
         dry_run: false,
+        no_preflight: false,
+        transform: false,
         jobs: None,
     };
     
@@ -274,6 +282,8 @@ async fn test_pretty_vs_compact_json() {
         watch: false,
         verbose: false,
         dry_run: false,
+        no_preflight: false,
+        transform: false,
         jobs: None,
     };
     

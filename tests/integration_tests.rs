@@ -15,6 +15,8 @@ fn create_test_args(input_dir: &str, output_dir: &TempDir) -> ExtractArgs {
         verbose: false,
         dry_run: false,
         jobs: Some(1),
+        no_preflight: false,
+        transform: false,
     }
 }
 

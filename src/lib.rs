@@ -1,12 +1,16 @@
 pub mod args;
+pub mod ast_mutator;
 pub mod ast_visitor;
+pub mod class_processor;
 pub mod config;
 pub mod errors;
 pub mod extractor;
 pub mod manifest;
 
 pub use args::{Cli, Commands, ExtractArgs, PipeArgs};
+pub use ast_mutator::{transform_code, TransformResult};
 pub use ast_visitor::{extract_strings_from_file, extract_strings_from_content, extract_strings_parallel, ExtractedString};
+pub use class_processor::TailwindClassProcessor;
 pub use config::{TailwindConfig, ObfuscationConfig};
 pub use errors::{ExtractorError, Result};
 pub use extractor::{TailwindExtractor, ClassInfo};
@@ -84,7 +88,7 @@ pub struct ExtractionResult {
     pub performance_stats: Option<PerformanceStats>,
 }
 
-/// Main extractor entry point
+/// Main extractor entry point (also handles transform mode)
 pub async fn extract(args: ExtractArgs) -> Result<ExtractionResult> {
     let start_time = Instant::now();
     let mut stats = PerformanceStats {
@@ -530,9 +534,90 @@ fn extract_strings_parallel_with_progress(
 // Re-export chrono for timestamp generation
 extern crate chrono;
 
-/// Handle pipe command - read JavaScript from stdin, output CSS to stdout
+/// Transform JavaScript files by mutating Tailwind class strings
+pub async fn transform_files(args: ExtractArgs) -> Result<()> {
+    use tailwind_rs::TailwindBuilder;
+    
+    // Validate arguments
+    args.validate()
+        .map_err(|e| ExtractorError::InvalidInput(e))?;
+
+    let config = ExtractorConfig::from(&args);
+    
+    if config.verbose {
+        eprintln!("Starting Tailwind class transformation...");
+        eprintln!("Input patterns: {:?}", args.input);
+    }
+
+    // Collect files matching the patterns
+    let files = collect_files_with_security(&args.input, &args.exclude, &config.security)?;
+    
+    if files.is_empty() {
+        return Err(ExtractorError::NoFilesFound);
+    }
+
+    if config.verbose {
+        eprintln!("Found {} files to transform", files.len());
+    }
+
+    // Create TailwindBuilder
+    let mut total_transformed = 0;
+
+    // Transform each file
+    for (file_path, _) in &files {
+        if config.verbose {
+            eprintln!("Transforming: {}", file_path.display());
+        }
+
+        // Read file content
+        let content = fs::read_to_string(file_path)
+            .map_err(|e| ExtractorError::InputError(format!("Failed to read {}: {}", file_path.display(), e)))?;
+
+        // Create a new builder for each file (TailwindBuilder is not Clone)
+        let builder = TailwindBuilder::default();
+        
+        // Transform the code
+        let result = transform_code(
+            &content,
+            &file_path.to_string_lossy(),
+            builder,
+            config.obfuscate,
+        )?;
+
+        if result.transformed_count > 0 {
+            total_transformed += result.transformed_count;
+            
+            if !args.dry_run {
+                // Write transformed code back to file atomically
+                write_atomic(file_path, &result.code)
+                    .map_err(|e| ExtractorError::OutputError {
+                        path: file_path.display().to_string(),
+                        message: e.to_string(),
+                    })?;
+            }
+            
+            if config.verbose {
+                eprintln!("  - Transformed {} class strings", result.transformed_count);
+            }
+        }
+    }
+
+    if config.verbose || total_transformed > 0 {
+        eprintln!("\nTransformation complete:");
+        eprintln!("  - Processed {} files", files.len());
+        eprintln!("  - Transformed {} class strings total", total_transformed);
+        if args.dry_run {
+            eprintln!("  - Dry run mode: no files were modified");
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle pipe command - read JavaScript from stdin, output CSS or transformed JS to stdout
 pub async fn handle_pipe_command(args: PipeArgs) -> Result<()> {
     use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+    use tailwind_rs::TailwindBuilder;
     
     // Read JavaScript content from stdin asynchronously
     let mut input = String::new();
@@ -540,41 +625,53 @@ pub async fn handle_pipe_command(args: PipeArgs) -> Result<()> {
     stdin.read_to_string(&mut input).await
         .map_err(|e| ExtractorError::InputError(format!("Failed to read from stdin: {}", e)))?;
     
-    // If input is empty, output empty CSS
+    // If input is empty, output empty
     if input.trim().is_empty() {
         return Ok(());
     }
     
-    // Extract strings from the JavaScript content
-    let extracted_strings = extract_strings_from_content(&input, "stdin")?;
+    let output = if args.transform {
+        // Transform mode: mutate the JavaScript code
+        let builder = TailwindBuilder::default();
+        let result = transform_code(&input, "stdin", builder, false)?;
+        
+        if result.transformed_count > 0 {
+            eprintln!("Transformed {} class strings", result.transformed_count);
+        }
+        
+        result.code
+    } else {
+        // Extract mode: generate CSS from extracted classes
+        let extracted_strings = extract_strings_from_content(&input, "stdin")?;
+        
+        // Collect unique class names
+        let mut unique_classes = std::collections::HashSet::new();
+        for extracted in &extracted_strings {
+            unique_classes.insert(extracted.value.clone());
+        }
+        
+        // If no classes found, output empty CSS
+        if unique_classes.is_empty() {
+            return Ok(());
+        }
+        
+        // Create a default Tailwind configuration
+        let tailwind_config = TailwindConfig::default();
+        
+        // Create the Tailwind extractor with preflight configuration
+        let mut extractor = TailwindExtractor::with_config_and_preflight(tailwind_config, args.no_preflight);
+        
+        // Add all extracted classes
+        let classes_vec: Vec<String> = unique_classes.into_iter().collect();
+        extractor.add_classes(&classes_vec, "stdin")?;
+        
+        // Generate CSS with optional minification
+        extractor.generate_css(args.minify)?
+    };
     
-    // Collect unique class names
-    let mut unique_classes = std::collections::HashSet::new();
-    for extracted in &extracted_strings {
-        unique_classes.insert(extracted.value.clone());
-    }
-    
-    // If no classes found, output empty CSS
-    if unique_classes.is_empty() {
-        return Ok(());
-    }
-    
-    // Create a default Tailwind configuration
-    let tailwind_config = TailwindConfig::default();
-    
-    // Create the Tailwind extractor with preflight configuration
-    let mut extractor = TailwindExtractor::with_config_and_preflight(tailwind_config, args.no_preflight);
-    
-    // Add all extracted classes
-    let classes_vec: Vec<String> = unique_classes.into_iter().collect();
-    extractor.add_classes(&classes_vec, "stdin")?;
-    
-    // Generate CSS with optional minification
-    let css_content = extractor.generate_css(args.minify)?;
-    
-    // Write CSS to stdout asynchronously
+    // Write output to stdout asynchronously
     let mut stdout = io::stdout();
-    stdout.write_all(css_content.as_bytes()).await
+    stdout.write_all(output.as_bytes()).await
         .map_err(|e| ExtractorError::OutputError {
             path: "stdout".to_string(),
             message: e.to_string(),

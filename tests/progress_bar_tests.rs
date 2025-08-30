@@ -27,6 +27,8 @@ async fn test_progress_bar_shows_in_non_verbose_mode() {
         jobs: Some(4),
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     // Should complete successfully with progress bar
@@ -59,6 +61,8 @@ async fn test_no_progress_bar_in_verbose_mode() {
         jobs: None,
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     // Should complete successfully without progress bar
@@ -104,6 +108,8 @@ async fn test_progress_updates_during_processing() {
         jobs: Some(2), // Use fewer threads to ensure progress is visible
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     let result = extract(args).await.unwrap();

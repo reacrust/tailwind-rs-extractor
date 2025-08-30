@@ -25,6 +25,8 @@ async fn test_helpful_error_messages_for_parse_errors() {
         jobs: None,
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     let result = extract(args).await;
@@ -59,6 +61,8 @@ async fn test_error_message_for_no_files_found() {
         jobs: None,
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     let result = extract(args).await;
@@ -87,6 +91,8 @@ async fn test_error_message_for_invalid_glob_pattern() {
         jobs: None,
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     let result = extract(args).await;
@@ -128,6 +134,8 @@ async fn test_error_message_for_write_permission_denied() {
         jobs: None,
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     let result = extract(args).await;
@@ -172,6 +180,8 @@ async fn test_security_error_messages_are_clear() {
         jobs: None,
         exclude: vec![],
         dry_run: false,
+        no_preflight: false,
+        transform: false,
     };
     
     // Should succeed but skip the large file with a warning

@@ -129,6 +129,14 @@ pub struct ExtractArgs {
         help = "Disable generation of Tailwind preflight/reset CSS"
     )]
     pub no_preflight: bool,
+
+    /// Transform mode - mutate JavaScript code to transform class names
+    #[arg(
+        long = "transform",
+        default_value_t = false,
+        help = "Transform Tailwind class names in JavaScript code (outputs transformed JS instead of CSS)"
+    )]
+    pub transform: bool,
 }
 
 /// Arguments for the pipe command
@@ -149,6 +157,14 @@ pub struct PipeArgs {
         help = "Disable generation of Tailwind preflight/reset CSS"
     )]
     pub no_preflight: bool,
+
+    /// Transform mode - mutate JavaScript code to transform class names
+    #[arg(
+        long = "transform",
+        default_value_t = false,
+        help = "Transform Tailwind class names in JavaScript code (outputs transformed JS instead of CSS)"
+    )]
+    pub transform: bool,
 }
 
 impl ExtractArgs {

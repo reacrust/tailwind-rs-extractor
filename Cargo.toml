@@ -11,7 +11,7 @@ name = "tailwind-extractor-cli"
 path = "src/main.rs"
 
 [dependencies]
-swc_core = { version = "37.0.0", features = ["ecma_parser", "ecma_ast", "ecma_visit", "common"] }
+swc_core = { version = "27.0.6", features = ["ecma_parser", "ecma_ast", "ecma_visit", "ecma_codegen", "common"] }
 tailwind-rs = { path = "../../vendor/tailwind-rs/projects/tailwind-rs" }
 clap = { version = "4.0", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }
