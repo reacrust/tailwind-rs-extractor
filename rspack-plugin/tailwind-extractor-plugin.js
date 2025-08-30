@@ -29,7 +29,6 @@ class TailwindExtractorPlugin {
    * @param {Array<string>} [options.exclude] - Patterns to exclude from scanning
    * @param {boolean} [options.dryRun=false] - Perform extraction but don't write output files
    * @param {boolean} [options.preflight=true] - Enable generation of Tailwind preflight/reset CSS
-   * @param {boolean} [options.enableTransformation=false] - Enable AST transformation of JavaScript files
    * @param {Array<string|RegExp>} [options.transformPatterns] - Patterns to match files for transformation
    */
   constructor(options = {}) {
@@ -52,7 +51,6 @@ class TailwindExtractorPlugin {
       exclude: options.exclude || [],
       dryRun: Boolean(options.dryRun),
       preflight: options.preflight !== undefined ? Boolean(options.preflight) : true, // Default to true for backward compatibility
-      enableTransformation: Boolean(options.enableTransformation),
       transformPatterns: options.transformPatterns || [
         // Default patterns: transform application code, skip vendor bundles
         /\bmain\b.*\.js$/,
@@ -179,56 +177,43 @@ class TailwindExtractorPlugin {
         }
       }
       
+      // Combined extraction and transformation in a single pass
       compilation.hooks.processAssets.tapPromise({
         name: pluginName,
         stage: webpack.Compilation.PROCESS_ASSETS_STAGE_OPTIMIZE_SIZE,
       }, async (assets) => {
         try {
           if (this.options.verbose) {
-            console.log(`[${pluginName}] Starting async Tailwind CSS extraction...`);
+            console.log(`[${pluginName}] Starting Tailwind extraction and transformation...`);
           }
 
-          // Build Gate 2.3: Asset Emission - Collect JavaScript content and emit CSS
+          // ALWAYS transform JavaScript first (not optional - needed for SSR/client alignment)
+          if (this.options.verbose) {
+            console.log(`[${pluginName}] Transforming JavaScript assets...`);
+          }
+          await this.transformAssetsAsync(compilation, assets);
+
+          // Then extract CSS from the transformed JavaScript
+          if (this.options.verbose) {
+            console.log(`[${pluginName}] Extracting CSS from transformed JavaScript...`);
+          }
           const cssFilename = await this.processAssetsAsync(compilation, assets);
 
           if (cssFilename) {
             // Track the generated CSS file globally
             globalCssFiles.add(cssFilename);
             if (this.options.verbose) {
-              console.log(`[${pluginName}] Tailwind CSS extraction completed successfully`);
-              console.log(`[${pluginName}] Added to global CSS files:`, cssFilename);
+              console.log(`[${pluginName}] Tailwind extraction and transformation completed successfully`);
+              console.log(`[${pluginName}] Generated CSS file:`, cssFilename);
             }
           }
         } catch (error) {
           // Log error but don't fail the build - allow webpack to continue
-          console.error(`[${pluginName}] Warning: Tailwind extraction encountered an error:`, error.message);
+          console.error(`[${pluginName}] Warning: Tailwind processing encountered an error:`, error.message);
           console.error(`[${pluginName}] Build will continue without Tailwind CSS generation for this bundle.`);
           // Don't throw - let build continue
         }
       });
-      
-      // Add transformation phase after CSS extraction
-      if (this.options.enableTransformation) {
-        compilation.hooks.processAssets.tapPromise({
-          name: `${pluginName}:transform`,
-          stage: webpack.Compilation.PROCESS_ASSETS_STAGE_OPTIMIZE,
-        }, async (assets) => {
-          try {
-            if (this.options.verbose) {
-              console.log(`[${pluginName}] Starting JavaScript transformation phase...`);
-            }
-            
-            await this.transformAssetsAsync(compilation, assets);
-            
-            if (this.options.verbose) {
-              console.log(`[${pluginName}] JavaScript transformation completed`);
-            }
-          } catch (error) {
-            console.error(`[${pluginName}] Warning: Transformation encountered an error:`, error.message);
-            // Don't fail the build
-          }
-        });
-      }
     });
   }
 
