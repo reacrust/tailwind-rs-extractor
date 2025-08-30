@@ -178,9 +178,11 @@ class TailwindExtractorPlugin {
       }
       
       // Combined extraction and transformation in a single pass
+      // Using ADDITIONS stage to run earlier in the pipeline, before other optimizations
       compilation.hooks.processAssets.tapPromise({
         name: pluginName,
-        stage: webpack.Compilation.PROCESS_ASSETS_STAGE_OPTIMIZE_SIZE,
+        stage: webpack.Compilation.PROCESS_ASSETS_STAGE_ADDITIONS,
+        additionalAssets: true // Important: process assets added by other plugins too
       }, async (assets) => {
         try {
           if (this.options.verbose) {
@@ -526,11 +528,15 @@ class TailwindExtractorPlugin {
         const transformedCode = await this.transformViaStdin(originalSource.toString());
         
         if (transformedCode && transformedCode !== originalSource.toString()) {
-          // Update the asset with transformed code
-          compilation.updateAsset(assetName, new RawSource(transformedCode));
+          // Directly replace the asset in the compilation assets object
+          // This is more aggressive but ensures the transformation persists
+          compilation.assets[assetName] = new RawSource(transformedCode);
           
           if (this.options.verbose) {
             console.log(`[TailwindExtractorPlugin] Transformed: ${assetName}`);
+            // Log a sample to verify transformation
+            const sample = transformedCode.substring(0, 200);
+            console.log(`[TailwindExtractorPlugin] Sample: ${sample.includes('bg-[#FFFFFFFF]') ? 'Contains transformed classes' : 'Original classes'}`);
           }
         }
       } catch (error) {
