@@ -189,15 +189,10 @@ class TailwindExtractorPlugin {
             console.log(`[${pluginName}] Starting Tailwind extraction and transformation...`);
           }
 
-          // ALWAYS transform JavaScript first (not optional - needed for SSR/client alignment)
+          // Extract CSS from JavaScript assets
+          // Note: Transformation is now handled by the loader, not the plugin
           if (this.options.verbose) {
-            console.log(`[${pluginName}] Transforming JavaScript assets...`);
-          }
-          await this.transformAssetsAsync(compilation, assets);
-
-          // Then extract CSS from the transformed JavaScript
-          if (this.options.verbose) {
-            console.log(`[${pluginName}] Extracting CSS from transformed JavaScript...`);
+            console.log(`[${pluginName}] Extracting CSS from JavaScript assets...`);
           }
           const cssFilename = await this.processAssetsAsync(compilation, assets);
 
