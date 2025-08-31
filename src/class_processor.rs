@@ -1,22 +1,20 @@
 use tailwind_rs::TailwindBuilder;
 
-/// Trait for processing Tailwind and custom classes with intelligent fallback strategies.
+/// Trait for processing Tailwind and custom classes.
 /// 
 /// This trait provides the shared logic for transforming class strings that may contain
-/// a mix of Tailwind utility classes and custom CSS classes. It implements a 4-tier
-/// fallback strategy to handle all possible combinations while preserving the order
-/// and integrity of custom classes.
+/// a mix of Tailwind utility classes and custom CSS classes. It leverages the fact that
+/// tailwind-rs's trace() method now passes through unrecognized classes unchanged,
+/// greatly simplifying the processing logic.
 pub trait TailwindClassProcessor {
     /// Get a reference to the TailwindBuilder for trace operations
     fn tailwind_builder(&mut self) -> &mut TailwindBuilder;
     
-    /// Process a class string with intelligent fallback handling for mixed classes.
+    /// Process a class string with Tailwind transformations.
     ///
-    /// This method implements a 4-tier fallback strategy:
-    /// 1. Try the whole string as pure Tailwind classes
-    /// 2. Try excluding the first class (custom prefix + Tailwind)
-    /// 3. Try excluding the last class (Tailwind + custom suffix) 
-    /// 4. Process each class individually (mixed Tailwind and custom)
+    /// This method now simply calls trace() on the entire string, as trace()
+    /// handles both Tailwind and custom classes correctly by passing through
+    /// unrecognized classes unchanged.
     ///
     /// IMPORTANT: This method preserves leading and trailing whitespace to ensure
     /// proper concatenation in JavaScript string expressions.
@@ -46,48 +44,12 @@ pub trait TailwindClassProcessor {
         let leading_space = &class_string[..content_start];
         let trailing_space = &class_string[content_end..];
         
-        // First try the whole string - optimal for pure Tailwind classes
-        if let Ok(result) = self.tailwind_builder().trace(trimmed, obfuscate) {
-            return format!("{}{}{}", leading_space, result, trailing_space);
+        // Simply call trace() on the trimmed content - it now handles everything!
+        // trace() will process Tailwind classes and pass through custom classes unchanged
+        match self.tailwind_builder().trace(trimmed, obfuscate) {
+            Ok(result) => format!("{}{}{}", leading_space, result, trailing_space),
+            Err(_) => class_string.to_string(), // Fallback to original on error
         }
-
-        // Split into individual classes
-        let classes: Vec<&str> = trimmed.split_whitespace().collect();
-        
-        // If single class, try to process it
-        if classes.len() == 1 {
-            match self.tailwind_builder().trace(classes[0], obfuscate) {
-                Ok(traced) => return format!("{}{}{}", leading_space, traced, trailing_space),
-                Err(_) => return class_string.to_string(), // Return original with spaces
-            }
-        }
-
-        // Try excluding the first class (maybe it's the only custom one)
-        if classes.len() > 1 {
-            let without_first = classes[1..].join(" ");
-            if let Ok(traced_tail) = self.tailwind_builder().trace(&without_first, obfuscate) {
-                return format!("{}{} {}{}", leading_space, classes[0], traced_tail, trailing_space);
-            }
-        }
-
-        // Try excluding the last class (maybe it's the only custom one)
-        if classes.len() > 1 {
-            let without_last = classes[..classes.len() - 1].join(" ");
-            if let Ok(traced_head) = self.tailwind_builder().trace(&without_last, obfuscate) {
-                return format!("{}{} {}{}", leading_space, traced_head, classes[classes.len() - 1], trailing_space);
-            }
-        }
-
-        // Last resort: try each class individually
-        // ALWAYS process all classes, even if they don't look like Tailwind
-        let processed: Vec<String> = classes.iter().map(|class| {
-            match self.tailwind_builder().trace(class, obfuscate) {
-                Ok(traced) => traced,
-                Err(_) => class.to_string(), // Pass through non-Tailwind classes unchanged
-            }
-        }).collect();
-        
-        format!("{}{}{}", leading_space, processed.join(" "), trailing_space)
     }
 }
 
@@ -138,7 +100,7 @@ mod tests {
     fn test_process_with_fallback_mixed_custom_first() {
         let mut processor = TestProcessor::new();
         
-        // Custom class at the beginning
+        // Custom class at the beginning  
         let result = processor.process_with_fallback("my-custom-class bg-blue-500 text-white", false);
         
         // The custom class should be preserved at the beginning
@@ -160,7 +122,7 @@ mod tests {
     fn test_process_with_fallback_mixed_custom_middle() {
         let mut processor = TestProcessor::new();
         
-        // Custom class in the middle - will fall back to individual processing
+        // Custom class in the middle - trace() handles mixed classes
         let result = processor.process_with_fallback("bg-blue-500 my-custom-class text-white", false);
         
         // All classes should be preserved
@@ -507,7 +469,7 @@ mod tests {
         let mut processor = TestProcessor::new();
         
         // Test case 1: Custom-Tailwind-Custom-Tailwind-Custom pattern
-        // This MUST fall back to tier 4 (individual processing) because custom classes are interspersed
+        // trace() now handles mixed classes directly
         let input = "custom-a bg-blue-500 custom-b text-white custom-c";
         let result = processor.process_with_fallback(input, false);
         
@@ -561,14 +523,13 @@ mod tests {
     }
     
     #[test]
-    fn test_tier_4_fallback_exact_order_preservation() {
+    fn test_exact_order_preservation_with_mixed_classes() {
         let mut processor = TestProcessor::new();
         
-        // This test specifically verifies the tier 4 fallback behavior
-        // When custom classes are interspersed with Tailwind classes,
-        // the algorithm MUST process each class individually and maintain exact order
+        // This test verifies that when custom classes are interspersed with Tailwind classes,
+        // the trace() method maintains their exact order
         
-        // Pattern that forces tier 4: custom classes in positions 0, 2, 4
+        // Pattern with custom classes in positions 0, 2, 4
         let input = "custom-first p-4 custom-second bg-blue-500 custom-third text-white custom-fourth";
         let result = processor.process_with_fallback(input, false);
         
