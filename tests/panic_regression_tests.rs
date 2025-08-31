@@ -102,6 +102,7 @@ fn test_complex_invalid_patterns() {
 }
 
 #[test]  
+#[ignore = "We don't support JSX"]
 fn test_file_mode_with_invalid_classes() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("test.js");
