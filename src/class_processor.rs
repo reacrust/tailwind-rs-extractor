@@ -501,4 +501,110 @@ mod tests {
         assert_eq!(result, "custom-class another-custom", 
                    "Should return unchanged when no spaces at edges");
     }
+
+    #[test]
+    fn test_process_with_fallback_preserves_mixed_class_order() {
+        let mut processor = TestProcessor::new();
+        
+        // Test case 1: Custom-Tailwind-Custom-Tailwind-Custom pattern
+        // This MUST fall back to tier 4 (individual processing) because custom classes are interspersed
+        let input = "custom-a bg-blue-500 custom-b text-white custom-c";
+        let result = processor.process_with_fallback(input, false);
+        
+        // Split result to analyze order
+        let result_classes: Vec<&str> = result.split_whitespace().collect();
+        
+        // Find positions of custom classes (they should pass through unchanged)
+        let custom_a_pos = result_classes.iter().position(|&c| c == "custom-a");
+        let custom_b_pos = result_classes.iter().position(|&c| c == "custom-b");
+        let custom_c_pos = result_classes.iter().position(|&c| c == "custom-c");
+        
+        assert!(custom_a_pos.is_some(), "custom-a should be present");
+        assert!(custom_b_pos.is_some(), "custom-b should be present");
+        assert!(custom_c_pos.is_some(), "custom-c should be present");
+        
+        // Verify order is preserved
+        assert!(custom_a_pos.unwrap() < custom_b_pos.unwrap(), 
+                "custom-a should come before custom-b");
+        assert!(custom_b_pos.unwrap() < custom_c_pos.unwrap(), 
+                "custom-b should come before custom-c");
+        
+        // Test case 2: More complex interleaving
+        let input2 = "prefix-1 p-4 middle-1 bg-red-600 middle-2 text-lg suffix-1";
+        let result2 = processor.process_with_fallback(input2, false);
+        
+        // Check that all custom classes appear in their original relative positions
+        let pos_prefix = result2.find("prefix-1").expect("prefix-1 not found");
+        let pos_middle1 = result2.find("middle-1").expect("middle-1 not found");
+        let pos_middle2 = result2.find("middle-2").expect("middle-2 not found");
+        let pos_suffix = result2.find("suffix-1").expect("suffix-1 not found");
+        
+        assert!(pos_prefix < pos_middle1, "prefix-1 should come before middle-1");
+        assert!(pos_middle1 < pos_middle2, "middle-1 should come before middle-2");
+        assert!(pos_middle2 < pos_suffix, "middle-2 should come before suffix-1");
+        
+        // Test case 3: Verify the exact output structure
+        // Even if Tailwind classes are transformed, the overall sequence should be maintained
+        let input3 = "my-custom bg-blue-500 another-custom";
+        let result3 = processor.process_with_fallback(input3, false);
+        let result3_classes: Vec<&str> = result3.split_whitespace().collect();
+        
+        // First class should start with "my-custom" or be "my-custom"
+        assert_eq!(result3_classes[0], "my-custom", "First class should be my-custom");
+        
+        // Last class should be "another-custom"
+        assert_eq!(result3_classes[result3_classes.len() - 1], "another-custom", 
+                   "Last class should be another-custom");
+        
+        // Middle content should be the processed Tailwind class(es)
+        // The key is that custom classes maintain their positions
+    }
+    
+    #[test]
+    fn test_tier_4_fallback_exact_order_preservation() {
+        let mut processor = TestProcessor::new();
+        
+        // This test specifically verifies the tier 4 fallback behavior
+        // When custom classes are interspersed with Tailwind classes,
+        // the algorithm MUST process each class individually and maintain exact order
+        
+        // Pattern that forces tier 4: custom classes in positions 0, 2, 4
+        let input = "custom-first p-4 custom-second bg-blue-500 custom-third text-white custom-fourth";
+        let result = processor.process_with_fallback(input, false);
+        
+        // Parse result into individual classes
+        let input_classes: Vec<&str> = input.split_whitespace().collect();
+        let result_classes: Vec<&str> = result.split_whitespace().collect();
+        
+        // The number of classes should be the same (no combining or splitting)
+        assert_eq!(input_classes.len(), result_classes.len(), 
+                   "Number of classes should remain the same");
+        
+        // Verify each custom class appears at its original index
+        assert_eq!(result_classes[0], "custom-first", 
+                   "Position 0: custom-first should remain at index 0");
+        assert_eq!(result_classes[2], "custom-second", 
+                   "Position 2: custom-second should remain at index 2");
+        assert_eq!(result_classes[4], "custom-third", 
+                   "Position 4: custom-third should remain at index 4");
+        assert_eq!(result_classes[6], "custom-fourth", 
+                   "Position 6: custom-fourth should remain at index 6");
+        
+        // Tailwind classes should be at their original positions (transformed or not)
+        // They should be at positions 1, 3, 5
+        // We don't check their exact values as they might be transformed,
+        // but they should exist at these positions
+        assert!(!result_classes[1].is_empty(), "Position 1 should have content (Tailwind class)");
+        assert!(!result_classes[3].is_empty(), "Position 3 should have content (Tailwind class)");
+        assert!(!result_classes[5].is_empty(), "Position 5 should have content (Tailwind class)");
+        
+        // Comprehensive order verification: compare each pair
+        for i in 0..input_classes.len() {
+            // If it's a custom class in the input, it should be unchanged in the output
+            if input_classes[i].starts_with("custom-") {
+                assert_eq!(result_classes[i], input_classes[i], 
+                           "Custom class at position {} should be unchanged", i);
+            }
+        }
+    }
 }
