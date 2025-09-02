@@ -47,7 +47,11 @@ pub trait TailwindClassProcessor {
         // Simply call trace() on the trimmed content - it now handles everything!
         // trace() will process Tailwind classes and pass through custom classes unchanged
         match self.tailwind_builder().trace(trimmed, obfuscate) {
-            Ok(result) => format!("{}{}{}", leading_space, result, trailing_space),
+            Ok(result) => {
+                // Convert Cow to String - use into_owned() to get the String
+                let result_str = result.into_owned();
+                format!("{}{}{}", leading_space, result_str, trailing_space)
+            },
             Err(_) => class_string.to_string(), // Fallback to original on error
         }
     }

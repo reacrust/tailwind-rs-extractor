@@ -94,8 +94,13 @@ impl TailwindExtractor {
         
         // Try to trace the class with Tailwind to validate it
         // The second parameter (false) means we want CSS output, not inline styles
-        if let Err(_) = self.builder.trace(class, false) {
-            // Class is not a valid Tailwind class, skip it
+        // Since trace() is now idempotent and handles both Tailwind and custom classes,
+        // we just check if it succeeds. The builder internally tracks what CSS to generate.
+        if self.builder.trace(class, false).is_ok() {
+            // Class was successfully traced, it's valid (either Tailwind or custom)
+            // Continue to add it to our tracking
+        } else {
+            // Trace failed, not a valid class
             return Ok(());
         }
         
@@ -150,6 +155,8 @@ impl TailwindExtractor {
             };
             
             // Trace the class for bundling
+            // The result is handled internally by the builder
+            // We don't need to use the returned Cow<str> here
             if let Err(e) = builder.trace(class_to_use, false) {
                 eprintln!("Warning: Failed to trace class '{}': {:?}", class_to_use, e);
             }
