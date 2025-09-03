@@ -8,59 +8,37 @@ const globalCssFiles = new Set();
 /**
  * RSpack plugin for Tailwind CSS extraction using the tailwind-extractor-cli tool.
  * 
- * This plugin runs during the processAssets hook to extract Tailwind CSS classes
- * from compiled JavaScript files and generates optimized CSS with content hashing.
+ * This plugin aggregates Tailwind classes from module metadata and generates
+ * optimized CSS with content hashing in a single pass.
  */
 class TailwindExtractorPlugin {
   /**
    * Create a new TailwindExtractorPlugin instance.
    * 
    * @param {Object} options - Configuration options
-   * @param {Array<string>} options.input - Input file patterns to scan (e.g., glob patterns)
-   * @param {string} [options.outputCss] - (Deprecated) Path where the generated CSS file will be written
+   * @param {Array<string>} options.input - Input file patterns to scan (kept for compatibility)
    * @param {string} [options.outputManifest] - (Optional) Path where the JSON manifest will be written
    * @param {string} [options.cliPath] - Path to the tailwind-extractor-cli binary
    * @param {string} [options.config] - Path to configuration file (YAML format)
-   * @param {boolean} [options.obfuscate=false] - Enable obfuscation of Tailwind class names
    * @param {boolean} [options.minify=false] - Enable minification of the output CSS
    * @param {boolean} [options.verbose=false] - Enable verbose output
    * @param {number} [options.timeout=30000] - Timeout for CLI execution in milliseconds
-   * @param {number} [options.jobs] - Number of parallel threads to use
-   * @param {Array<string>} [options.exclude] - Patterns to exclude from scanning
-   * @param {boolean} [options.dryRun=false] - Perform extraction but don't write output files
    * @param {boolean} [options.preflight=true] - Enable generation of Tailwind preflight/reset CSS
-   * @param {Array<string|RegExp>} [options.transformPatterns] - Patterns to match files for transformation
    */
   constructor(options = {}) {
-    // Validate required options
-    if (!options.input || !Array.isArray(options.input) || options.input.length === 0) {
-      throw new Error('TailwindExtractorPlugin: options.input must be a non-empty array of file patterns');
-    }
-
     this.options = {
-      input: options.input,
-      outputCss: options.outputCss, // Deprecated, kept for backward compatibility
+      input: options.input || [], // Kept for backward compatibility
       outputManifest: options.outputManifest,
       cliPath: options.cliPath || this.findCliBinary(),
       config: options.config,
-      obfuscate: Boolean(options.obfuscate),
       minify: Boolean(options.minify),
       verbose: Boolean(options.verbose),
       timeout: options.timeout || 30000,
-      jobs: options.jobs,
-      exclude: options.exclude || [],
-      dryRun: Boolean(options.dryRun),
-      preflight: options.preflight !== undefined ? Boolean(options.preflight) : true, // Default to true for backward compatibility
-      transformPatterns: options.transformPatterns || [
-        // Default patterns: transform application code, skip vendor bundles
-        /\bmain\b.*\.js$/,
-        /\bapp\b.*\.js$/,
-        /\bclient\b.*\.js$/,
-        /\bindex\b.*\.js$/,
-        // Exclude vendor chunks by default
-        { exclude: /vendor|chunk|polyfill|runtime/ }
-      ],
+      preflight: options.preflight !== undefined ? Boolean(options.preflight) : true,
     };
+    
+    // Storage for collected Tailwind classes
+    this.collectedClasses = new Set();
     
     // Track cleanup handlers
     this.cleanupHandlers = new Set();
@@ -101,10 +79,69 @@ class TailwindExtractorPlugin {
   apply(compiler) {
     const pluginName = 'TailwindExtractorPlugin';
 
-    // Build Gate 2.1: Hook Migration - Use processAssets instead of beforeCompile
     compiler.hooks.compilation.tap(pluginName, (compilation) => {
       // Import webpack from compiler instance to get correct version
       const webpack = compiler.webpack || require('@rspack/core');
+      
+      // Hook into module processing to collect Tailwind classes
+      compilation.hooks.finishModules.tap(pluginName, (modules) => {
+        if (this.options.verbose) {
+          console.log(`[${pluginName}] Collecting Tailwind classes from modules...`);
+        }
+        
+        // Clear previous collection for this compilation
+        this.collectedClasses.clear();
+        
+        // Iterate through all modules and collect their Tailwind metadata
+        for (const module of modules) {
+          // Check for tailwindClasses directly on the module
+          if (module.tailwindClasses) {
+            if (Array.isArray(module.tailwindClasses)) {
+              module.tailwindClasses.forEach(className => {
+                this.collectedClasses.add(className);
+              });
+              
+              if (this.options.verbose) {
+                console.log(`[${pluginName}] Found ${module.tailwindClasses.length} classes in module:`, module.resource || module.identifier?.());
+              }
+            }
+          }
+          
+          // Also check for tailwindMetadata with classes property
+          if (module.tailwindMetadata?.classes) {
+            if (Array.isArray(module.tailwindMetadata.classes)) {
+              module.tailwindMetadata.classes.forEach(className => {
+                this.collectedClasses.add(className);
+              });
+              
+              if (this.options.verbose) {
+                console.log(`[${pluginName}] Found ${module.tailwindMetadata.classes.length} classes in module metadata:`, module.resource || module.identifier?.());
+              }
+            }
+          }
+          
+          // Check for buildInfo.tailwindClasses (webpack loader metadata pattern)
+          if (module.buildInfo?.tailwindClasses) {
+            if (Array.isArray(module.buildInfo.tailwindClasses)) {
+              module.buildInfo.tailwindClasses.forEach(className => {
+                this.collectedClasses.add(className);
+              });
+              
+              if (this.options.verbose) {
+                console.log(`[${pluginName}] Found ${module.buildInfo.tailwindClasses.length} classes in buildInfo:`, module.resource || module.identifier?.());
+              }
+            }
+          }
+        }
+        
+        if (this.options.verbose) {
+          console.log(`[${pluginName}] Total unique Tailwind classes collected:`, this.collectedClasses.size);
+          if (this.collectedClasses.size > 0 && this.collectedClasses.size <= 20) {
+            // Show sample of classes if not too many
+            console.log(`[${pluginName}] Classes:`, Array.from(this.collectedClasses));
+          }
+        }
+      });
       
       // Try to hook into HtmlRspackPlugin if available
       try {
@@ -124,7 +161,7 @@ class TailwindExtractorPlugin {
             console.log(`[${pluginName}] Got HtmlRspackPlugin hooks`);
           }
           
-          // Solution: Use beforeEmit hook to inject CSS after all processing is done
+          // Use beforeEmit hook to inject CSS after all processing is done
           hooks.beforeEmit.tap(pluginName, (data) => {
             // First check compilation.assets for this specific compilation
             const localCssAssets = Object.keys(compilation.assets).filter(name => 
@@ -177,37 +214,46 @@ class TailwindExtractorPlugin {
         }
       }
       
-      // Combined extraction and transformation in a single pass
-      // Using ADDITIONS stage to run earlier in the pipeline, before other optimizations
+      // Generate CSS once from all collected classes
       compilation.hooks.processAssets.tapPromise({
         name: pluginName,
-        stage: webpack.Compilation.PROCESS_ASSETS_STAGE_ADDITIONS,
-        additionalAssets: true // Important: process assets added by other plugins too
+        stage: webpack.Compilation.PROCESS_ASSETS_STAGE_OPTIMIZE_SIZE
       }, async (assets) => {
         try {
           if (this.options.verbose) {
-            console.log(`[${pluginName}] Starting Tailwind extraction and transformation...`);
+            console.log(`[${pluginName}] Starting Tailwind CSS generation...`);
           }
 
-          // Extract CSS from JavaScript assets
-          // Note: Transformation is now handled by the loader, not the plugin
-          if (this.options.verbose) {
-            console.log(`[${pluginName}] Extracting CSS from JavaScript assets...`);
+          // Only generate CSS if we have collected classes
+          if (this.collectedClasses.size === 0) {
+            if (this.options.verbose) {
+              console.log(`[${pluginName}] No Tailwind classes collected, skipping CSS generation`);
+            }
+            return;
           }
-          const cssFilename = await this.processAssetsAsync(compilation, assets);
+
+          // Convert collected classes to array for processing
+          const classesArray = Array.from(this.collectedClasses);
+          
+          if (this.options.verbose) {
+            console.log(`[${pluginName}] Generating CSS for ${classesArray.length} unique Tailwind classes`);
+          }
+
+          // Generate CSS from collected classes
+          const cssFilename = await this.generateCSSFromClasses(compilation, classesArray);
 
           if (cssFilename) {
             // Track the generated CSS file globally
             globalCssFiles.add(cssFilename);
             if (this.options.verbose) {
-              console.log(`[${pluginName}] Tailwind extraction and transformation completed successfully`);
+              console.log(`[${pluginName}] Tailwind CSS generation completed successfully`);
               console.log(`[${pluginName}] Generated CSS file:`, cssFilename);
             }
           }
         } catch (error) {
           // Log error but don't fail the build - allow webpack to continue
-          console.error(`[${pluginName}] Warning: Tailwind processing encountered an error:`, error.message);
-          console.error(`[${pluginName}] Build will continue without Tailwind CSS generation for this bundle.`);
+          console.error(`[${pluginName}] Warning: Tailwind CSS generation encountered an error:`, error.message);
+          console.error(`[${pluginName}] Build will continue without Tailwind CSS generation.`);
           // Don't throw - let build continue
         }
       });
@@ -215,44 +261,34 @@ class TailwindExtractorPlugin {
   }
 
   /**
-   * Process assets asynchronously and emit CSS with content hashing.
+   * Generate CSS from collected Tailwind classes and emit with content hashing.
    * 
    * @param {Object} compilation - Webpack compilation object
-   * @param {Object} assets - Compilation assets
+   * @param {Array<string>} classes - Array of Tailwind class names
    * @returns {Promise<string|null>} The filename of the emitted CSS asset, or null
    */
-  async processAssetsAsync(compilation, assets) {
-    // Build Gate 2.3: Collect JavaScript content from compilation assets
-    const jsAssets = Object.keys(assets).filter(name => 
-      name.endsWith('.js') || name.endsWith('.mjs')
-    );
+  async generateCSSFromClasses(compilation, classes) {
+    if (!classes || classes.length === 0) {
+      return null;
+    }
+
+    // Create a JavaScript snippet containing all the classes as strings
+    // The CLI's pipe mode expects JavaScript code to extract from, not raw class names
+    const jsContent = classes.map(cls => `"${cls.replace(/"/g, '\\"')}"`).join(', ');
+    const jsSnippet = `const classes = [${jsContent}];`;
     
-    if (jsAssets.length === 0) {
-      if (this.options.verbose) {
-        console.log('[TailwindExtractorPlugin] No JavaScript assets found, skipping extraction');
-      }
-      return null;
-    }
-
-    // Combine all JavaScript content
-    let combinedJsContent = '';
-    for (const assetName of jsAssets) {
-      const asset = assets[assetName];
-      const source = asset.source();
-      if (source) {
-        combinedJsContent += source.toString() + '\n';
+    if (this.options.verbose) {
+      console.log(`[TailwindExtractorPlugin] Generating CSS from JavaScript with ${classes.length} classes`);
+      // Log a sample of the JS for debugging
+      if (jsSnippet.length < 500) {
+        console.log(`[TailwindExtractorPlugin] JS snippet: ${jsSnippet}`);
+      } else {
+        console.log(`[TailwindExtractorPlugin] JS snippet (truncated): ${jsSnippet.substring(0, 500)}...`);
       }
     }
-
-    if (!combinedJsContent.trim()) {
-      if (this.options.verbose) {
-        console.log('[TailwindExtractorPlugin] No JavaScript content found in assets');
-      }
-      return null;
-    }
-
-    // Build Gate 2.2: Extract CSS via async stdin/stdout pipe
-    const cssContent = await this.extractViaStdin(combinedJsContent);
+    
+    // Generate CSS using the CLI in pipe mode
+    const cssContent = await this.generateViaStdin(jsSnippet);
     
     if (!cssContent || !cssContent.trim()) {
       if (this.options.verbose) {
@@ -261,7 +297,7 @@ class TailwindExtractorPlugin {
       return null;
     }
 
-    // Build Gate 2.3: Emit CSS with content hashing
+    // Generate content hash for the CSS
     const hash = require('crypto')
       .createHash('md5')
       .update(cssContent)
@@ -271,13 +307,13 @@ class TailwindExtractorPlugin {
     const cssFilename = `tailwind.${hash}.css`;
     
     // Use webpack.sources.RawSource for the CSS content
-    // Get webpack from compilation context
     const webpack = compilation.compiler.webpack || require('@rspack/core');
     const { RawSource } = webpack.sources;
     compilation.emitAsset(cssFilename, new RawSource(cssContent));
     
     if (this.options.verbose) {
       console.log(`[TailwindExtractorPlugin] Emitted CSS asset: ${cssFilename}`);
+      console.log(`[TailwindExtractorPlugin] CSS size: ${cssContent.length} bytes`);
     }
     
     // Optionally write manifest if configured
@@ -288,6 +324,7 @@ class TailwindExtractorPlugin {
           hash: hash,
           timestamp: new Date().toISOString(),
           size: cssContent.length,
+          classCount: classes.length
         };
         fs.writeFileSync(
           this.options.outputManifest, 
@@ -302,16 +339,16 @@ class TailwindExtractorPlugin {
   }
 
   /**
-   * Build Gate 2.2: Extract CSS using async stdin/stdout pipe.
+   * Generate CSS using the CLI in pipe mode (without --transform).
    * 
-   * @param {string} jsContent - JavaScript content to process
-   * @returns {Promise<string>} Extracted CSS content
+   * @param {string} classesContent - Tailwind classes (one per line)
+   * @returns {Promise<string>} Generated CSS content
    */
-  async extractViaStdin(jsContent) {
+  async generateViaStdin(classesContent) {
     return new Promise((resolve, reject) => {
       const args = ['pipe'];
       
-      // Add optional arguments (pipe mode only supports minify and no-preflight)
+      // Add optional arguments
       if (this.options.minify) {
         args.push('--minify');
       }
@@ -320,12 +357,15 @@ class TailwindExtractorPlugin {
       if (!this.options.preflight) {
         args.push('--no-preflight');
       }
-      
-      // Note: pipe mode doesn't support these flags, they're ignored:
-      // --obfuscate, --verbose, --config, --jobs
 
       if (this.options.verbose) {
         console.log(`[TailwindExtractorPlugin] Spawning: ${this.options.cliPath} ${args.join(' ')}`);
+        // Log the actual content being sent
+        if (classesContent.length < 200) {
+          console.log(`[TailwindExtractorPlugin] Stdin content: ${classesContent}`);
+        } else {
+          console.log(`[TailwindExtractorPlugin] Stdin content (${classesContent.length} chars): ${classesContent.substring(0, 200)}...`);
+        }
       }
 
       const child = spawn(this.options.cliPath, args, {
@@ -341,10 +381,10 @@ class TailwindExtractorPlugin {
       const timeoutId = setTimeout(() => {
         timedOut = true;
         child.kill('SIGTERM');
-        reject(new Error(`Tailwind extraction timed out after ${this.options.timeout}ms`));
+        reject(new Error(`Tailwind CSS generation timed out after ${this.options.timeout}ms`));
       }, this.options.timeout);
 
-      // Cleanup function to ensure child process is terminated
+      // Cleanup function
       const cleanup = () => {
         clearTimeout(timeoutId);
         if (!child.killed) {
@@ -352,7 +392,7 @@ class TailwindExtractorPlugin {
         }
       };
 
-      // Register cleanup handlers
+      // Register cleanup handlers for process termination
       const registerCleanup = () => {
         const handlers = ['exit', 'SIGINT', 'SIGTERM'].map(event => {
           const handler = () => {
@@ -367,7 +407,6 @@ class TailwindExtractorPlugin {
       
       registerCleanup();
 
-      // Write JavaScript content to stdin
       child.stdin.on('error', (err) => {
         if (!timedOut) {
           cleanup();
@@ -398,7 +437,7 @@ class TailwindExtractorPlugin {
         }
         
         if (code !== 0) {
-          reject(new Error(`Tailwind extraction failed with exit code ${code}: ${stderr}`));
+          reject(new Error(`Tailwind CSS generation failed with exit code ${code}: ${stderr}`));
         } else {
           if (this.options.verbose && stderr) {
             console.log(`[TailwindExtractorPlugin] CLI output: ${stderr}`);
@@ -407,224 +446,8 @@ class TailwindExtractorPlugin {
         }
       });
 
-      // Write content and close stdin
-      child.stdin.write(jsContent);
-      child.stdin.end();
-    });
-  }
-
-  /**
-   * Execute the tailwind-extractor-cli with the configured options.
-   * @deprecated Use extractViaStdin for async processing
-   */
-  extract() {
-    console.warn('[TailwindExtractorPlugin] extract() is deprecated. Plugin now uses async processing.');
-  }
-
-  /**
-   * Build command line arguments for the tailwind-extractor-cli.
-   * @deprecated No longer needed with stdin/stdout pipe mode
-   */
-  buildArgs() {
-    console.warn('[TailwindExtractorPlugin] buildArgs() is deprecated. Plugin now uses pipe mode.');
-    return '';
-  }
-
-  /**
-   * Escape a command line argument to prevent shell injection.
-   * @deprecated No longer needed with spawn API
-   */
-  escapeArg(arg) {
-    return arg;
-  }
-  
-  /**
-   * Check if a file should be transformed based on configured patterns.
-   * 
-   * @param {string} filename - The filename to check
-   * @returns {boolean} True if the file should be transformed
-   */
-  shouldTransformFile(filename) {
-    // Check each pattern
-    for (const pattern of this.options.transformPatterns) {
-      // Handle exclusion patterns
-      if (pattern && typeof pattern === 'object' && pattern.exclude) {
-        const excludePattern = pattern.exclude;
-        if (excludePattern instanceof RegExp) {
-          if (excludePattern.test(filename)) {
-            return false; // Explicitly excluded
-          }
-        } else if (typeof excludePattern === 'string') {
-          if (filename.includes(excludePattern)) {
-            return false;
-          }
-        }
-      }
-      // Handle inclusion patterns
-      else if (pattern instanceof RegExp) {
-        if (pattern.test(filename)) {
-          return true; // Matches inclusion pattern
-        }
-      } else if (typeof pattern === 'string') {
-        if (filename.includes(pattern)) {
-          return true;
-        }
-      }
-    }
-    
-    // If no patterns matched and we have patterns defined, don't transform
-    return this.options.transformPatterns.length === 0;
-  }
-  
-  /**
-   * Transform JavaScript assets using the tailwind-extractor-cli.
-   * 
-   * @param {Object} compilation - Webpack compilation object
-   * @param {Object} assets - Compilation assets
-   */
-  async transformAssetsAsync(compilation, assets) {
-    // Get webpack from compilation context
-    const webpack = compilation.compiler.webpack || require('@rspack/core');
-    const { RawSource } = webpack.sources;
-    
-    // Find JavaScript assets to transform
-    const jsAssets = Object.keys(assets).filter(name => {
-      // Only transform JavaScript files
-      if (!name.endsWith('.js') && !name.endsWith('.mjs')) {
-        return false;
-      }
-      
-      // Check if this file should be transformed
-      return this.shouldTransformFile(name);
-    });
-    
-    if (jsAssets.length === 0) {
-      if (this.options.verbose) {
-        console.log('[TailwindExtractorPlugin] No JavaScript assets to transform');
-      }
-      return;
-    }
-    
-    if (this.options.verbose) {
-      console.log(`[TailwindExtractorPlugin] Transforming ${jsAssets.length} JavaScript assets:`, jsAssets);
-    }
-    
-    // Transform each asset
-    const transformPromises = jsAssets.map(async (assetName) => {
-      try {
-        const asset = assets[assetName];
-        const originalSource = asset.source();
-        
-        if (!originalSource) {
-          return;
-        }
-        
-        // Transform the code using the CLI
-        const transformedCode = await this.transformViaStdin(originalSource.toString());
-        
-        if (transformedCode && transformedCode !== originalSource.toString()) {
-          // Directly replace the asset in the compilation assets object
-          // This is more aggressive but ensures the transformation persists
-          compilation.assets[assetName] = new RawSource(transformedCode);
-          
-          if (this.options.verbose) {
-            console.log(`[TailwindExtractorPlugin] Transformed: ${assetName}`);
-            // Log a sample to verify transformation
-            const sample = transformedCode.substring(0, 200);
-            console.log(`[TailwindExtractorPlugin] Sample: ${sample.includes('bg-[#FFFFFFFF]') ? 'Contains transformed classes' : 'Original classes'}`);
-          }
-        }
-      } catch (error) {
-        console.warn(`[TailwindExtractorPlugin] Failed to transform ${assetName}:`, error.message);
-        // Continue with other files
-      }
-    });
-    
-    // Wait for all transformations to complete
-    await Promise.all(transformPromises);
-  }
-  
-  /**
-   * Transform JavaScript code using the tailwind-extractor-cli.
-   * 
-   * @param {string} jsCode - JavaScript code to transform
-   * @returns {Promise<string>} Transformed JavaScript code
-   */
-  async transformViaStdin(jsCode) {
-    return new Promise((resolve, reject) => {
-      const args = ['pipe', '--transform'];
-      
-      if (this.options.verbose) {
-        console.log(`[TailwindExtractorPlugin] Spawning transform: ${this.options.cliPath} ${args.join(' ')}`);
-      }
-      
-      const child = spawn(this.options.cliPath, args, {
-        timeout: this.options.timeout,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      
-      let stdout = '';
-      let stderr = '';
-      let timedOut = false;
-      
-      // Set up timeout handler
-      const timeoutId = setTimeout(() => {
-        timedOut = true;
-        child.kill('SIGTERM');
-        reject(new Error(`Transformation timed out after ${this.options.timeout}ms`));
-      }, this.options.timeout);
-      
-      // Cleanup function
-      const cleanup = () => {
-        clearTimeout(timeoutId);
-        if (!child.killed) {
-          child.kill('SIGTERM');
-        }
-      };
-      
-      child.stdin.on('error', (err) => {
-        if (!timedOut) {
-          cleanup();
-          reject(new Error(`Failed to write to stdin: ${err.message}`));
-        }
-      });
-      
-      child.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-      
-      child.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-      
-      child.on('error', (err) => {
-        if (!timedOut) {
-          cleanup();
-          reject(new Error(`Failed to spawn tailwind-extractor-cli: ${err.message}`));
-        }
-      });
-      
-      child.on('close', (code) => {
-        cleanup();
-        
-        if (timedOut) {
-          return;
-        }
-        
-        if (code !== 0) {
-          // Transformation failure - return original code
-          console.warn(`[TailwindExtractorPlugin] Transformation failed (exit ${code}), preserving original code`);
-          resolve(jsCode); // Return original code on failure
-        } else {
-          if (this.options.verbose && stderr) {
-            console.log(`[TailwindExtractorPlugin] Transform output: ${stderr}`);
-          }
-          resolve(stdout || jsCode); // Return transformed code or original if empty
-        }
-      });
-      
-      // Write content and close stdin
-      child.stdin.write(jsCode);
+      // Write classes and close stdin
+      child.stdin.write(classesContent);
       child.stdin.end();
     });
   }
