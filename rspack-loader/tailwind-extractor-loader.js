@@ -286,14 +286,20 @@ function extractTailwindClasses(source) {
   // This pattern matches:
   // - Standard utilities: bg-red-500, text-lg, p-4, etc.
   // - Responsive modifiers: sm:, md:, lg:, xl:, 2xl:
+  // - Container query modifiers: @xs:, @sm:, @md:, @lg:, @xl:, @2xl:
   // - State modifiers: hover:, focus:, active:, disabled:, etc.
   // - Dark mode: dark:
+  // - Container utilities: @container
   // - Arbitrary values: w-[100px], text-[#ff0000]
   // - Negative values: -mt-4, -translate-x-1/2
   // - Fractional values: w-1/2, h-3/4
   // - Important modifier: !bg-red-500
   
   const patterns = [
+    // Container query utilities (@container and @{size}:utilities)
+    // Matches: @container, @xs:grid-cols-1, @lg:text-lg, etc.
+    /@(?:container|(?:xs|sm|md|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl):[a-z][a-z0-9-]*(?:-[a-z0-9]+)*(?:-\[[^\]]+\])?)\b/g,
+    
     // Standard Tailwind utilities with optional modifiers and values
     /\b(?:(?:sm|md|lg|xl|2xl|hover|focus|active|disabled|dark|group-hover|peer-checked|first|last|odd|even|focus-within|focus-visible|motion-safe|motion-reduce|print|rtl|ltr):)*(?:!?-?(?:container|sr-only|not-sr-only|static|fixed|absolute|relative|sticky|inset|top|right|bottom|left|z|flex|inline-flex|table|inline-table|grid|inline-grid|hidden|block|inline-block|flow-root|contents|list-item|float|clear|object|overflow|overscroll|visible|invisible|isolate|isolation|break|box|decoration|indent|align|justify|place|self|items|content|gap|order|col|row|auto|basis|grow|shrink|w|h|min-w|min-h|max-w|max-h|aspect|p|px|py|pt|pr|pb|pl|ps|pe|m|mx|my|mt|mr|mb|ml|ms|me|space|divide|border|rounded|ring|shadow|opacity|mix-blend|bg|from|via|to|text|font|leading|tracking|line|list|placeholder|caret|accent|appearance|cursor|outline|pointer-events|resize|scroll|snap|touch|select|will-change|fill|stroke|animate|transition|duration|delay|ease|scale|rotate|translate|skew|origin|blur|brightness|contrast|grayscale|hue-rotate|invert|saturate|sepia|backdrop)(?:-(?:[a-zA-Z]+|[0-9]+(?:\/[0-9]+)?|\[[^\]]+\]))*)\b/g,
     
@@ -361,8 +367,9 @@ function extractTailwindClasses(source) {
       // Filter out false positives and ensure valid Tailwind class structure
       const className = match[0];
       
-      // Basic validation: must start with a letter or responsive prefix
-      if (/^(?:(?:sm|md|lg|xl|2xl|hover|focus|active|disabled|dark|group-hover|peer-checked|first|last|odd|even|focus-within|focus-visible|motion-safe|motion-reduce|print|rtl|ltr):)*[a-z!-]/.test(className)) {
+      // Basic validation: must start with @ for container queries, a letter, or responsive prefix
+      // Allow: @container, @xs:grid-cols-1, sm:text-lg, bg-blue-500, !bg-red-500, -mt-4
+      if (/^(?:@(?:container|(?:xs|sm|md|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl):)|(?:(?:sm|md|lg|xl|2xl|hover|focus|active|disabled|dark|group-hover|peer-checked|first|last|odd|even|focus-within|focus-visible|motion-safe|motion-reduce|print|rtl|ltr):)*[a-z!-])/.test(className)) {
         classes.add(className);
       }
     }
