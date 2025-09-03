@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 use tempfile::TempDir;
-use tailwind_extractor::{extract, ExtractArgs, ExtractorError};
+use tailwind_extractor::{extract, ExtractArgs};
 
 #[tokio::test]
 async fn test_file_size_limit() {
@@ -130,7 +130,7 @@ async fn test_path_traversal_protection() {
     
     // Should fail or succeed based on working directory context
     // In dry-run mode we allow it, but in real mode it depends on the actual path resolution
-    let result_unsafe = extract(args_unsafe).await;
+    let _result_unsafe = extract(args_unsafe).await;
     // We're not asserting failure here because relative paths might still be safe
     // depending on the working directory. The security check ensures paths
     // don't escape the working directory.

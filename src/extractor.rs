@@ -1,7 +1,7 @@
 use crate::config::{TailwindConfig, ObfuscationConfig};
 use crate::errors::{ExtractorError, Result};
 use crate::manifest::ManifestBuilder;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use std::path::Path;
 use tailwind_rs::TailwindBuilder;
 use serde::{Deserialize, Serialize};
@@ -40,10 +40,10 @@ pub struct TailwindExtractor {
     builder: TailwindBuilder,
     
     /// Tracked classes with their information
-    classes: HashMap<String, ClassInfo>,
+    classes: IndexMap<String, ClassInfo>,
     
     /// Obfuscation mapping (original -> obfuscated)
-    obfuscation_map: HashMap<String, String>,
+    obfuscation_map: IndexMap<String, String>
 }
 
 impl TailwindExtractor {
@@ -59,8 +59,8 @@ impl TailwindExtractor {
         Self {
             config,
             builder,
-            classes: HashMap::new(),
-            obfuscation_map: HashMap::new(),
+            classes: IndexMap::new(),
+            obfuscation_map: IndexMap::new(),
         }
     }
     
@@ -74,8 +74,8 @@ impl TailwindExtractor {
         Self {
             config,
             builder,
-            classes: HashMap::new(),
-            obfuscation_map: HashMap::new(),
+            classes: IndexMap::new(),
+            obfuscation_map: IndexMap::new(),
         }
     }
     
@@ -193,7 +193,7 @@ impl TailwindExtractor {
             .with_classes_extracted(self.classes.len());
         
         // Build class information map
-        let mut class_info_map = HashMap::new();
+        let mut class_info_map = IndexMap::new();
         for (class_name, info) in &self.classes {
             class_info_map.insert(class_name.clone(), info.files.clone());
         }

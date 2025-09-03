@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use chrono::{DateTime, Utc};
 
 /// Metadata for the generated manifest
@@ -51,11 +51,11 @@ pub struct Manifest {
     pub metadata: ManifestMetadata,
     
     /// Map of class names to their usage information
-    pub classes: HashMap<String, ManifestClassInfo>,
+    pub classes: IndexMap<String, ManifestClassInfo>,
     
     /// Obfuscation mappings (original -> obfuscated)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mappings: Option<HashMap<String, String>>,
+    pub mappings: Option<IndexMap<String, String>>,
     
     /// Statistics about the extraction
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -108,7 +108,7 @@ impl Manifest {
                 build_mode: None,
                 extractor_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             },
-            classes: HashMap::new(),
+            classes: IndexMap::new(),
             mappings: None,
             statistics: None,
         }
@@ -129,7 +129,7 @@ impl Manifest {
     }
     
     /// Set obfuscation mappings
-    pub fn set_mappings(&mut self, mappings: HashMap<String, String>) {
+    pub fn set_mappings(&mut self, mappings: IndexMap<String, String>) {
         self.metadata.obfuscation_enabled = true;
         self.mappings = Some(mappings);
     }
@@ -225,7 +225,7 @@ impl ManifestBuilder {
     }
     
     /// Add class information from a HashMap
-    pub fn with_class_info(mut self, classes: HashMap<String, Vec<String>>) -> Self {
+    pub fn with_class_info(mut self, classes: IndexMap<String, Vec<String>>) -> Self {
         for (class_name, locations) in classes {
             let info = ManifestClassInfo {
                 count: locations.len(),
@@ -238,7 +238,7 @@ impl ManifestBuilder {
     }
     
     /// Set obfuscation mappings
-    pub fn with_mappings(mut self, mappings: HashMap<String, String>) -> Self {
+    pub fn with_mappings(mut self, mappings: IndexMap<String, String>) -> Self {
         self.manifest.set_mappings(mappings);
         self
     }
@@ -283,7 +283,7 @@ mod tests {
     
     #[test]
     fn test_manifest_builder() {
-        let mut classes = HashMap::new();
+        let mut classes = IndexMap::new();
         classes.insert("p-4".to_string(), vec![
             "src/app.js:1:1".to_string(),
             "src/app.js:2:1".to_string(),

@@ -43,9 +43,9 @@ fn test_css_minification() {
 
 #[test]
 fn test_manifest_structure() {
-    let mut builder = ManifestBuilder::new();
+    let builder = ManifestBuilder::new();
     
-    let mut classes = std::collections::HashMap::new();
+    let mut classes = indexmap::IndexMap::new();
     classes.insert("bg-blue-500".to_string(), vec![
         "src/app.js:10:15".to_string(),
         "src/component.js:20:5".to_string(),
@@ -110,7 +110,7 @@ async fn test_atomic_file_writes() {
     };
     
     // Run extraction
-    let result = extract(args).await.unwrap();
+    let _result = extract(args).await.unwrap();
     
     // Verify files were created
     assert!(output_css.exists());

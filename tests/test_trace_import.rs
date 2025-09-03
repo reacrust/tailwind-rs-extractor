@@ -4,15 +4,13 @@ fn test_trace_import_string() {
     
     let mut builder = TailwindBuilder::default();
     
-    // Test trace with the problematic import string
+    // Test trace with import strings - they should NOT be transformed
     let test_cases = vec![
         ("react/jsx-runtime", "react/jsx-runtime"),  // Should be unchanged
-        ("react", "react"),                           // May be transformed (trace returns Owned)
+        ("react", "react"),                           // Should be unchanged  
         ("jsx-runtime", "jsx-runtime"),               // Should be unchanged
-        ("p-4 bg-blue-500", "p-4 bg-blue-500"),      // May be transformed
-        // Note: "@rescript/core" is incorrectly transformed to "@rescript" by trace()
-        // This is a bug in tailwind-rs where it treats "/core" as a modifier
-        ("@rescript/core", "@rescript"),              // Bug: incorrectly transformed
+        ("p-4 bg-blue-500", "p-4 bg-blue-500"),      // May be transformed (valid Tailwind classes)
+        ("@rescript/core", "@rescript/core"),         // Should be unchanged - it's an import path!
     ];
     
     for (input, expected) in &test_cases {
