@@ -6,8 +6,16 @@
 
 pub mod processor;
 
+// AST transformation module (only available with swc_core feature)
+#[cfg(feature = "cli")]
+pub mod ast_transformer;
+
 // Re-export the main trait at the crate root for convenience
 pub use processor::TailwindClassProcessor;
 
 // Re-export TailwindBuilder for consumers who need it
 pub use tailwind_rs::TailwindBuilder;
+
+// Re-export AST transformation functionality when available
+#[cfg(feature = "cli")]
+pub use ast_transformer::{transform_source, TransformConfig, TransformMetadata};
