@@ -35,4 +35,35 @@ const test5 = isDark ? "hover:bg-blue-600" : "hover:bg-gray-600";
             );
         }
     }
+
+    #[test]
+    fn test_arbitrary_values_with_decimals() {
+        let source = r#"
+// Test arbitrary values with decimal points
+const test1 = "gap-[0.25rem] gap-[1.5rem]";
+const test2 = "leading-[162.5%]";
+const test3 = condition ? "gap-[0.25rem]" : "gap-[1.5rem]";
+const test4 = ["gap-[0.25rem]", "leading-[162.5%]"].join(" ");
+const test5 = `${baseClass} gap-[0.25rem] leading-[162.5%]`;
+        "#;
+
+        let config = TransformConfig::default();
+        let (_, metadata) = transform_source(source, config).unwrap();
+
+        // Check that decimal arbitrary values are extracted correctly
+        let expected_classes = vec![
+            "gap-[0.25rem]",
+            "gap-[1.5rem]",
+            "leading-[162.5%]",
+        ];
+
+        for class in expected_classes {
+            assert!(
+                metadata.classes.contains(&class.to_string()),
+                "Missing arbitrary value class: {}. Extracted classes: {:?}",
+                class,
+                metadata.classes
+            );
+        }
+    }
 }

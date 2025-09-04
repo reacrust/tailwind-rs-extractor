@@ -24,6 +24,57 @@ use swc_core::{
 use crate::TailwindClassProcessor;
 use tailwind_rs::TailwindBuilder;
 
+/// Parse Tailwind classes from a string, correctly handling arbitrary values with brackets
+fn parse_tailwind_classes(input: &str) -> Vec<String> {
+    let mut classes = Vec::new();
+    let mut current_class = String::new();
+    let mut bracket_depth = 0;
+    let mut chars = input.chars().peekable();
+    
+    while let Some(ch) = chars.next() {
+        match ch {
+            '[' => {
+                bracket_depth += 1;
+                current_class.push(ch);
+            }
+            ']' => {
+                bracket_depth -= 1;
+                current_class.push(ch);
+                // If we're back at depth 0 and have content, this might be end of a class
+                if bracket_depth == 0 && !current_class.is_empty() {
+                    // Check if next char is whitespace or end of string
+                    if chars.peek().map_or(true, |&c| c.is_whitespace()) {
+                        classes.push(current_class.clone());
+                        current_class.clear();
+                    }
+                }
+            }
+            c if c.is_whitespace() => {
+                // Only split on whitespace when not inside brackets
+                if bracket_depth == 0 {
+                    if !current_class.is_empty() {
+                        classes.push(current_class.clone());
+                        current_class.clear();
+                    }
+                } else {
+                    // Preserve whitespace inside brackets
+                    current_class.push(c);
+                }
+            }
+            c => {
+                current_class.push(c);
+            }
+        }
+    }
+    
+    // Don't forget the last class if there is one
+    if !current_class.is_empty() {
+        classes.push(current_class);
+    }
+    
+    classes
+}
+
 /// Metadata collected during AST transformation
 #[derive(Debug, Clone)]
 pub struct TransformMetadata {
@@ -90,10 +141,11 @@ impl TailwindTransformer {
 
     /// Extract individual classes from a string for metadata collection
     fn extract_classes(&mut self, value: &str) {
-        // Split on whitespace and collect non-empty tokens
-        for class in value.split_whitespace() {
+        // Use a proper parser that handles arbitrary values with brackets
+        let classes = parse_tailwind_classes(value);
+        for class in classes {
             if !class.is_empty() {
-                self.classes.insert(class.to_string());
+                self.classes.insert(class);
                 self.total_count += 1;
             }
         }
@@ -685,5 +737,70 @@ JsxRuntime.jsx("button", {
         
         // Verify transformation applied
         assert!(transformed.contains(&trace_assert("px-4 py-2 bg-indigo-500 hover:bg-indigo-600", false)));
+    }
+
+    #[test]
+    fn test_arbitrary_values_with_decimals() {
+        let source = r#"
+function TestComponent() {
+  return (
+    <div className="gap-[0.25rem] p-[2.5rem] leading-[162.5%] text-[1.25rem]">
+      <span className="gap-[1.5rem] mt-[0.75rem] w-[33.333%] h-[12.5px]">
+        Test content with decimal arbitrary values
+      </span>
+    </div>
+  );
+}
+        "#;
+
+        let config = TransformConfig::default();
+        let (transformed, metadata) = transform_source(source, config).unwrap();
+
+        // All arbitrary values with decimals should be extracted correctly
+        let expected_classes = vec![
+            "gap-[0.25rem]",
+            "p-[2.5rem]",
+            "leading-[162.5%]",
+            "text-[1.25rem]",
+            "gap-[1.5rem]",
+            "mt-[0.75rem]",
+            "w-[33.333%]",
+            "h-[12.5px]",
+        ];
+
+        for class in &expected_classes {
+            assert!(
+                metadata.classes.contains(&class.to_string()),
+                "Missing arbitrary value class with decimal: {}",
+                class
+            );
+        }
+
+        // Also verify the count
+        assert_eq!(metadata.classes.len(), 8);
+        assert_eq!(metadata.original_count, 8);
+    }
+
+    #[test]
+    fn test_parse_tailwind_classes_function() {
+        // Test the parsing function directly
+        let test_cases = vec![
+            ("flex items-center", vec!["flex", "items-center"]),
+            ("gap-[0.25rem] p-4", vec!["gap-[0.25rem]", "p-4"]),
+            ("text-[1.5rem] hover:bg-blue-500", vec!["text-[1.5rem]", "hover:bg-blue-500"]),
+            ("w-[33.333%] h-[12.5px]", vec!["w-[33.333%]", "h-[12.5px]"]),
+            ("leading-[162.5%]", vec!["leading-[162.5%]"]),
+            // Test nested brackets (though rare in Tailwind)
+            ("custom-[calc(100%-2rem)]", vec!["custom-[calc(100%-2rem)]"]),
+        ];
+
+        for (input, expected) in test_cases {
+            let result = parse_tailwind_classes(input);
+            assert_eq!(
+                result, expected,
+                "Failed to parse '{}' correctly",
+                input
+            );
+        }
     }
 }
