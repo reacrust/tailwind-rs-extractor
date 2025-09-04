@@ -1,32 +1,46 @@
-//! Simplified pipe CLI for Tailwind CSS extraction
-//! 
-//! This CLI reads JavaScript from stdin and outputs CSS to stdout.
-//! It supports two modes:
-//! 1. pipe (default) - Generate CSS from extracted classes
-//! 2. pipe --transform - Transform JavaScript and output transformed JS
+//! Tailwind CSS extractor CLI with transform and generate modes
+//!
+//! This CLI provides two distinct modes:
+//! 1. transform - Read JS from stdin, transform it using AST transformer, output to stdout, write metadata to file
+//! 2. generate - Read metadata JSON from stdin, generate CSS using tailwind-rs, output to stdout
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::io::{self, Read, Write};
+use std::path::PathBuf;
+use tailwind_extractor::{transform_source, TransformConfig};
 use tailwind_rs::TailwindBuilder;
 
 #[derive(Parser)]
 #[command(name = "tailwind-extractor-cli")]
-#[command(about = "Tailwind CSS extractor pipe mode", long_about = None)]
+#[command(about = "Tailwind CSS extractor and transformer CLI", long_about = None)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
+    command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Extract classes from JavaScript and generate CSS (pipe mode)
-    Pipe {
-        /// Transform JavaScript instead of generating CSS
-        #[arg(long)]
-        transform: bool,
+    /// Transform JavaScript/TypeScript, extracting Tailwind classes
+    Transform {
+        /// Path to write metadata JSON file
+        #[arg(value_name = "METADATA_PATH")]
+        metadata_output: PathBuf,
         
+        /// Obfuscate Tailwind classes for production
+        #[arg(long)]
+        obfuscate: bool,
+        
+        /// Source file name (optional, for metadata)
+        #[arg(long)]
+        source_file: Option<String>,
+    },
+    
+    /// Generate CSS from metadata JSON
+    Generate {
         /// Disable preflight CSS
         #[arg(long = "no-preflight")]
         no_preflight: bool,
@@ -37,133 +51,136 @@ enum Commands {
     },
 }
 
+/// Metadata format for class extraction
+#[derive(Debug, Serialize, Deserialize)]
+struct Metadata {
+    /// Deduplicated list of all classes found
+    classes: Vec<String>,
+    /// Original source file name (if provided)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceFile")]
+    source_file: Option<String>,
+    /// ISO timestamp of processing
+    #[serde(rename = "processedAt")]
+    processed_at: String,
+    /// Crate version
+    version: String,
+    /// Statistics about extraction
+    stats: Stats,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Stats {
+    /// Count of classes before deduplication
+    #[serde(rename = "originalCount")]
+    original_count: usize,
+    /// Count of unique classes
+    #[serde(rename = "uniqueCount")]
+    unique_count: usize,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     
-    // Default to pipe command if no command specified
-    let command = cli.command.unwrap_or(Commands::Pipe {
-        transform: false,
-        no_preflight: false,
-        minify: false,
-    });
-    
-    match command {
-        Commands::Pipe { transform, no_preflight, minify } => {
-            if transform {
-                handle_transform_mode()
-            } else {
-                handle_css_generation_mode(no_preflight, minify)
-            }
+    match cli.command {
+        Commands::Transform { metadata_output, obfuscate, source_file } => {
+            handle_transform_mode(metadata_output, obfuscate, source_file)
+        }
+        Commands::Generate { no_preflight, minify } => {
+            handle_generate_mode(no_preflight, minify)
         }
     }
 }
 
-/// Transform mode: Read JS from stdin, transform Tailwind classes, output transformed JS
-fn handle_transform_mode() -> Result<()> {
-    // TODO: Implement JavaScript transformation using SWC
-    // For now, just pass through the input unchanged
+/// Transform mode: Read JS from stdin, transform it, output transformed JS and metadata
+fn handle_transform_mode(
+    metadata_output: PathBuf,
+    obfuscate: bool,
+    source_file: Option<String>,
+) -> Result<()> {
+    // Read JavaScript from stdin
     let mut input = String::new();
-    io::stdin().read_to_string(&mut input)
-        .context("Failed to read from stdin")?;
+    io::stdin()
+        .read_to_string(&mut input)
+        .context("Failed to read JavaScript from stdin")?;
     
-    io::stdout().write_all(input.as_bytes())
-        .context("Failed to write to stdout")?;
+    // Configure transformation
+    let config = TransformConfig {
+        obfuscate,
+        source_maps: false,
+    };
+    
+    // Transform the source code using AST transformer
+    let (transformed_js, transform_metadata) = transform_source(&input, config)
+        .context("Failed to transform JavaScript")?;
+    
+    // Write transformed JavaScript to stdout
+    io::stdout()
+        .write_all(transformed_js.as_bytes())
+        .context("Failed to write transformed JavaScript to stdout")?;
+    
+    // Prepare metadata
+    let unique_count = transform_metadata.classes.len();
+    let metadata = Metadata {
+        classes: transform_metadata.classes,
+        source_file,
+        processed_at: chrono::Utc::now().to_rfc3339(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        stats: Stats {
+            original_count: transform_metadata.original_count,
+            unique_count,
+        },
+    };
+    
+    // Write metadata to file
+    let metadata_json = serde_json::to_string_pretty(&metadata)
+        .context("Failed to serialize metadata")?;
+    
+    fs::write(&metadata_output, metadata_json)
+        .with_context(|| format!("Failed to write metadata to {:?}", metadata_output))?;
     
     Ok(())
 }
 
-/// CSS generation mode: Read JS from stdin, extract classes, generate and output CSS
-fn handle_css_generation_mode(no_preflight: bool, _minify: bool) -> Result<()> {
-    // Read input from stdin
+/// Generate mode: Read metadata JSON from stdin, generate CSS and output to stdout
+fn handle_generate_mode(no_preflight: bool, minify: bool) -> Result<()> {
+    // Read metadata JSON from stdin
     let mut input = String::new();
-    io::stdin().read_to_string(&mut input)
-        .context("Failed to read from stdin")?;
+    io::stdin()
+        .read_to_string(&mut input)
+        .context("Failed to read metadata JSON from stdin")?;
     
     // If input is empty, output empty CSS
     if input.trim().is_empty() {
         return Ok(());
     }
     
-    // Extract Tailwind classes from the JavaScript input
-    let classes = extract_classes_from_javascript(&input)?;
+    // Parse metadata
+    let metadata: Metadata = serde_json::from_str(&input)
+        .context("Failed to parse metadata JSON")?;
     
-    if classes.is_empty() {
-        // No classes found, output empty CSS
+    // If no classes, output empty CSS
+    if metadata.classes.is_empty() {
         return Ok(());
     }
     
     // Generate CSS using tailwind-rs
-    let css = generate_tailwind_css(classes, no_preflight)?;
+    let css = generate_tailwind_css(metadata.classes, no_preflight, minify)?;
     
     // Write CSS to stdout
-    io::stdout().write_all(css.as_bytes())
+    io::stdout()
+        .write_all(css.as_bytes())
         .context("Failed to write CSS to stdout")?;
     
     Ok(())
 }
 
-/// Extract Tailwind classes from JavaScript content
-fn extract_classes_from_javascript(js_content: &str) -> Result<Vec<String>> {
-    let mut classes = HashSet::new();
-    
-    // Extract classes from JavaScript arrays like: const classes = ["class1", "class2", ...]
-    // This is what the test is sending us
-    if let Some(array_start) = js_content.find('[') {
-        if let Some(array_end) = js_content[array_start..].find(']') {
-            let array_content = &js_content[array_start + 1..array_start + array_end];
-            
-            // Extract strings from the array
-            for item in array_content.split(',') {
-                let trimmed = item.trim();
-                // Remove quotes if present
-                let class = if trimmed.starts_with('"') && trimmed.ends_with('"') {
-                    &trimmed[1..trimmed.len() - 1]
-                } else if trimmed.starts_with('\'') && trimmed.ends_with('\'') {
-                    &trimmed[1..trimmed.len() - 1]
-                } else {
-                    trimmed
-                };
-                
-                if !class.is_empty() {
-                    // Split on spaces to handle multiple classes in one string
-                    for individual_class in class.split_whitespace() {
-                        classes.insert(individual_class.to_string());
-                    }
-                }
-            }
-        }
-    }
-    
-    // Also look for string literals in general (fallback for other formats)
-    // Match patterns like "class1 class2" or 'class1 class2'
-    let string_pattern = regex::Regex::new(r#"["']([^"']+)["']"#)?;
-    for cap in string_pattern.captures_iter(js_content) {
-        if let Some(matched) = cap.get(1) {
-            let class_string = matched.as_str();
-            // Check if this looks like Tailwind classes (contains hyphens or common prefixes)
-            if class_string.contains('-') || 
-               class_string.starts_with("hover:") || 
-               class_string.starts_with("focus:") ||
-               class_string.starts_with("lg:") ||
-               class_string.starts_with("md:") ||
-               class_string.starts_with("sm:") ||
-               class_string.starts_with("xl:") ||
-               class_string.starts_with("2xl:") ||
-               class_string.starts_with("dark:") ||
-               class_string.starts_with("@") {
-                for class in class_string.split_whitespace() {
-                    classes.insert(class.to_string());
-                }
-            }
-        }
-    }
-    
-    Ok(classes.into_iter().collect())
-}
-
-
 /// Generate Tailwind CSS for the given classes
-fn generate_tailwind_css(classes: Vec<String>, no_preflight: bool) -> Result<String> {
+fn generate_tailwind_css(
+    classes: Vec<String>,
+    no_preflight: bool,
+    _minify: bool, // Note: minify isn't directly supported by tailwind-rs yet
+) -> Result<String> {
     let mut builder = TailwindBuilder::default();
     
     // Configure preflight
@@ -171,16 +188,20 @@ fn generate_tailwind_css(classes: Vec<String>, no_preflight: bool) -> Result<Str
     
     // Process each class through the builder
     for class in &classes {
-        // Try to trace the class - silently ignore failures
-        // This is where tailwind-rs limitations become apparent
+        // Try to trace the class - silently ignore failures for unknown classes
         let _ = builder.trace(class, false);
     }
     
-    // Generate the CSS bundle from tailwind-rs
+    // Generate the CSS bundle
     match builder.bundle() {
-        Ok(css_string) => Ok(css_string),
+        Ok(css_string) => {
+            // TODO: If minify is true, we could post-process the CSS here
+            // For now, return as-is since tailwind-rs doesn't have built-in minification
+            Ok(css_string)
+        }
         Err(e) => {
-            eprintln!("Warning: tailwind-rs bundle generation failed: {}", e);
+            // Log warning to stderr and return empty CSS
+            eprintln!("Warning: CSS generation failed: {}", e);
             Ok(String::new())
         }
     }
@@ -189,33 +210,52 @@ fn generate_tailwind_css(classes: Vec<String>, no_preflight: bool) -> Result<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+    use tempfile::NamedTempFile;
     
     #[test]
-    fn test_extract_classes_from_array() {
-        let js = r#"const classes = ["bg-blue-500", "text-white", "p-4", "hover:bg-blue-600"];"#;
-        let classes = extract_classes_from_javascript(js).unwrap();
-        assert!(classes.contains(&"bg-blue-500".to_string()));
-        assert!(classes.contains(&"text-white".to_string()));
-        assert!(classes.contains(&"p-4".to_string()));
-        assert!(classes.contains(&"hover:bg-blue-600".to_string()));
+    fn test_metadata_serialization() {
+        let metadata = Metadata {
+            classes: vec!["bg-blue-500".to_string(), "text-white".to_string()],
+            source_file: Some("test.js".to_string()),
+            processed_at: "2024-01-01T00:00:00Z".to_string(),
+            version: "0.1.0".to_string(),
+            stats: Stats {
+                original_count: 3,
+                unique_count: 2,
+            },
+        };
+        
+        let json = serde_json::to_string(&metadata).unwrap();
+        let parsed: Metadata = serde_json::from_str(&json).unwrap();
+        
+        assert_eq!(parsed.classes.len(), 2);
+        assert_eq!(parsed.stats.original_count, 3);
+        assert_eq!(parsed.stats.unique_count, 2);
     }
     
     #[test]
-    fn test_extract_classes_with_spaces() {
-        let js = r#"const classes = ["bg-blue-500 text-white", "p-4 m-2"];"#;
-        let classes = extract_classes_from_javascript(js).unwrap();
-        assert!(classes.contains(&"bg-blue-500".to_string()));
-        assert!(classes.contains(&"text-white".to_string()));
-        assert!(classes.contains(&"p-4".to_string()));
-        assert!(classes.contains(&"m-2".to_string()));
-    }
-    
-    #[test]
-    fn test_extract_responsive_classes() {
-        let js = r#"const classes = ["lg:flex-row", "md:grid-cols-2", "sm:text-base"];"#;
-        let classes = extract_classes_from_javascript(js).unwrap();
-        assert!(classes.contains(&"lg:flex-row".to_string()));
-        assert!(classes.contains(&"md:grid-cols-2".to_string()));
-        assert!(classes.contains(&"sm:text-base".to_string()));
+    fn test_generate_css_from_metadata() {
+        let metadata = Metadata {
+            classes: vec![
+                "bg-blue-500".to_string(),
+                "text-white".to_string(),
+                "p-4".to_string(),
+            ],
+            source_file: None,
+            processed_at: chrono::Utc::now().to_rfc3339(),
+            version: "0.1.0".to_string(),
+            stats: Stats {
+                original_count: 3,
+                unique_count: 3,
+            },
+        };
+        
+        let css = generate_tailwind_css(metadata.classes, true, false).unwrap();
+        
+        // Should contain CSS for the classes
+        assert!(!css.is_empty());
+        // With no-preflight, shouldn't contain reset styles
+        assert!(!css.contains("html"));
     }
 }
