@@ -1,0 +1,25 @@
+{
+  "name": "tailwind-extractor-loader",
+  "version": "1.0.0",
+  "description": "Rspack loader for tailwind-extractor CLI - transforms JS/TS files to extract Tailwind classes",
+  "main": "tailwind-extractor-loader.js",
+  "exports": {
+    ".": "./tailwind-extractor-loader.js"
+  },
+  "keywords": [
+    "rspack",
+    "webpack",
+    "loader",
+    "tailwind",
+    "css",
+    "extraction"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "peerDependencies": {
+    "@rspack/core": ">=0.5.0"
+  }
+}
