@@ -24,6 +24,21 @@ use swc_core::{
 use crate::TailwindClassProcessor;
 use tailwind_rs::TailwindBuilder;
 
+/// Context tracking for AST traversal to avoid processing strings in wrong contexts
+#[derive(Debug, Clone, PartialEq)]
+enum AstContext {
+    /// Top-level code context
+    TopLevel,
+    /// Inside JSX/React props - carries the prop name if known
+    JsxProps(Option<String>),
+    /// Inside an object literal
+    ObjectLiteral,
+    /// Inside a function call - carries function name
+    FunctionCall(String),
+    /// Inside an import statement
+    ImportStatement,
+}
+
 /// Parse Tailwind classes from a string, correctly handling arbitrary values with brackets
 fn parse_tailwind_classes(input: &str) -> Vec<String> {
     let mut classes = Vec::new();
@@ -112,6 +127,8 @@ struct TailwindTransformer {
     classes: IndexSet<String>,
     /// Count of all classes before deduplication
     total_count: usize,
+    /// Context stack for tracking where we are in the AST
+    context_stack: Vec<AstContext>,
 }
 
 impl TailwindTransformer {
@@ -122,7 +139,20 @@ impl TailwindTransformer {
             config,
             classes: IndexSet::new(),
             total_count: 0,
+            context_stack: vec![AstContext::TopLevel],
         })
+    }
+
+    /// Push a new context onto the stack
+    fn push_context(&mut self, ctx: AstContext) {
+        self.context_stack.push(ctx);
+    }
+
+    /// Pop the current context from the stack
+    fn pop_context(&mut self) {
+        if self.context_stack.len() > 1 {
+            self.context_stack.pop();
+        }
     }
 
     /// Process a string literal and transform its classes
@@ -153,8 +183,33 @@ impl TailwindTransformer {
 
     /// Check if we should process this string based on context
     fn should_process_string(&self) -> bool {
-        // We process all string literals in relevant contexts
-        // This could be refined based on parent node context if needed
+        // Never process strings in import statements
+        if self.context_stack.iter().any(|ctx| matches!(ctx, AstContext::ImportStatement)) {
+            return false;
+        }
+
+        // Check if we're in a JSX context
+        let in_jsx = self.context_stack.iter().any(|ctx| {
+            matches!(ctx, AstContext::FunctionCall(name) if name == "_jsx" || name == "jsx" || name == "jsxs" || name == "createElement" || name.contains("JsxRuntime"))
+        });
+
+        if in_jsx {
+            // In JSX context, only process if we're in className/class props
+            for ctx in self.context_stack.iter().rev() {
+                if let AstContext::JsxProps(Some(prop_name)) = ctx {
+                    return prop_name == "className" || prop_name == "class";
+                }
+            }
+            // If we're in JSX but not in a specific prop context,
+            // check if we're in an object literal (props object)
+            if self.context_stack.iter().any(|ctx| matches!(ctx, AstContext::ObjectLiteral)) {
+                // Only process if the current context suggests it's a className value
+                return true;
+            }
+            return false;
+        }
+
+        // Outside JSX, process strings normally (for variables, arrays, etc.)
         true
     }
 }
@@ -224,13 +279,44 @@ impl VisitMut for TailwindTransformer {
     fn visit_mut_prop(&mut self, node: &mut Prop) {
         match node {
             Prop::KeyValue(kv) => {
-                // Process both key and value if they're strings
-                if let PropName::Str(str_key) = &mut kv.key {
-                    let processed = self.process_string(&str_key.value);
-                    str_key.value = processed.into();
-                    str_key.raw = None;
+                // Extract the property name for context tracking
+                let prop_name = match &kv.key {
+                    PropName::Ident(ident) => Some(ident.sym.to_string()),
+                    PropName::Str(s) => Some(s.value.to_string()),
+                    _ => None,
+                };
+
+                // Check if we're in a JSX context
+                let in_jsx = self.context_stack.iter().any(|ctx| {
+                    matches!(ctx, AstContext::FunctionCall(name) if name.contains("jsx") || name.contains("JsxRuntime") || name == "createElement")
+                });
+
+                // If in JSX and this is a prop, push JSX props context
+                if in_jsx {
+                    self.push_context(AstContext::JsxProps(prop_name.clone()));
+                } else {
+                    // For object literals outside JSX, push object literal context
+                    if !self.context_stack.iter().any(|ctx| matches!(ctx, AstContext::ObjectLiteral)) {
+                        self.push_context(AstContext::ObjectLiteral);
+                    }
                 }
+
+                // Process the key if it's a string (for object literal keys that might be classes)
+                if let PropName::Str(str_key) = &mut kv.key {
+                    if self.should_process_string() {
+                        let processed = self.process_string(&str_key.value);
+                        str_key.value = processed.into();
+                        str_key.raw = None;
+                    }
+                }
+
+                // Visit the value
                 kv.value.visit_mut_with(self);
+
+                // Pop the context we pushed
+                if in_jsx || !self.context_stack.iter().any(|ctx| matches!(ctx, AstContext::ObjectLiteral)) {
+                    self.pop_context();
+                }
             }
             _ => node.visit_mut_children_with(self),
         }
@@ -270,35 +356,72 @@ impl VisitMut for TailwindTransformer {
 
     /// Visit call expressions (for Array.join() and similar patterns)
     fn visit_mut_call_expr(&mut self, node: &mut CallExpr) {
-        // Special handling for JSX function calls (JsxRuntime.jsx, JsxRuntime.jsxs)
-        if let Callee::Expr(expr) = &mut node.callee {
-            if let Expr::Member(member_expr) = &**expr {
-                // Check for JsxRuntime.jsx or JsxRuntime.jsxs
-                if let Expr::Ident(obj_ident) = &*member_expr.obj {
-                    if obj_ident.sym.as_ref() == "JsxRuntime" {
+        // Determine the function being called
+        let func_name = if let Callee::Expr(expr) = &node.callee {
+            match &**expr {
+                Expr::Member(member_expr) => {
+                    // Handle member calls like JsxRuntime.jsx
+                    if let Expr::Ident(obj_ident) = &*member_expr.obj {
                         if let MemberProp::Ident(method_ident) = &member_expr.prop {
-                            if matches!(method_ident.sym.as_ref(), "jsx" | "jsxs") {
-                                // This is a JSX element creation - process its props
-                                self.visit_jsx_props(&mut node.args);
-                                return;
-                            }
+                            format!("{}.{}", obj_ident.sym, method_ident.sym)
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        if let MemberProp::Ident(method_ident) = &member_expr.prop {
+                            method_ident.sym.to_string()
+                        } else {
+                            String::new()
                         }
                     }
                 }
-                
-                // Check if this is a .join() call on an array
-                if let MemberProp::Ident(ident) = &member_expr.prop {
-                    if ident.sym.as_ref() == "join" {
-                        // Visit the entire call expression's children to process array elements
-                        node.visit_mut_children_with(self);
-                        return;
-                    }
+                Expr::Ident(ident) => ident.sym.to_string(),
+                _ => String::new(),
+            }
+        } else {
+            String::new()
+        };
+
+        // Special handling for JSX function calls
+        if func_name.contains("JsxRuntime") || func_name == "jsx" || func_name == "jsxs" || func_name == "_jsx" || func_name == "createElement" {
+            self.push_context(AstContext::FunctionCall(func_name.clone()));
+            
+            // Process the JSX props specially
+            if node.args.len() >= 2 {
+                // First arg is component, second is props
+                if let Some(first_arg) = node.args.get_mut(0) {
+                    first_arg.expr.visit_mut_with(self);
                 }
+                
+                // Process props object with context
+                if let Some(props_arg) = node.args.get_mut(1) {
+                    self.push_context(AstContext::ObjectLiteral);
+                    props_arg.expr.visit_mut_with(self);
+                    self.pop_context();
+                }
+                
+                // Process remaining args
+                for arg in node.args.iter_mut().skip(2) {
+                    arg.expr.visit_mut_with(self);
+                }
+            } else {
+                node.visit_mut_children_with(self);
+            }
+            
+            self.pop_context();
+        } else if func_name == "join" {
+            // For array.join(), process normally
+            node.visit_mut_children_with(self);
+        } else {
+            // For other function calls, push context and visit
+            if !func_name.is_empty() {
+                self.push_context(AstContext::FunctionCall(func_name));
+                node.visit_mut_children_with(self);
+                self.pop_context();
+            } else {
+                node.visit_mut_children_with(self);
             }
         }
-        
-        // Visit all children to ensure we process strings in arguments
-        node.visit_mut_children_with(self);
     }
 
     /// Visit array literals (for className arrays)
@@ -317,20 +440,33 @@ impl VisitMut for TailwindTransformer {
         node.left.visit_mut_with(self);
         node.right.visit_mut_with(self);
     }
-}
 
-impl TailwindTransformer {
-    /// Process JSX props to extract className values
-    fn visit_jsx_props(&mut self, args: &mut Vec<ExprOrSpread>) {
-        // JSX calls typically have two arguments: element name and props object
-        if args.len() >= 2 {
-            // The second argument is the props object
-            let ExprOrSpread { expr, .. } = &mut args[1];
-            // Visit the props object to extract className
-            expr.visit_mut_with(self);
+    /// Visit import declarations to avoid processing import paths
+    fn visit_mut_import_decl(&mut self, node: &mut ImportDecl) {
+        self.push_context(AstContext::ImportStatement);
+        node.visit_mut_children_with(self);
+        self.pop_context();
+    }
+
+    /// Visit export declarations
+    fn visit_mut_export_decl(&mut self, node: &mut ExportDecl) {
+        // Don't interfere with exports, just visit children normally
+        node.visit_mut_children_with(self);
+    }
+
+    /// Visit module declarations  
+    fn visit_mut_module_decl(&mut self, node: &mut ModuleDecl) {
+        match node {
+            ModuleDecl::Import(import) => {
+                self.push_context(AstContext::ImportStatement);
+                import.visit_mut_children_with(self);
+                self.pop_context();
+            }
+            _ => node.visit_mut_children_with(self),
         }
     }
 }
+
 
 /// Transform JavaScript/TypeScript source code, processing Tailwind classes
 pub fn transform_source(
@@ -754,7 +890,7 @@ function TestComponent() {
         "#;
 
         let config = TransformConfig::default();
-        let (transformed, metadata) = transform_source(source, config).unwrap();
+        let (_transformed, metadata) = transform_source(source, config).unwrap();
 
         // All arbitrary values with decimals should be extracted correctly
         let expected_classes = vec![
