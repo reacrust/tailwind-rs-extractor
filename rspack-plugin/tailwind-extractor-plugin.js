@@ -161,6 +161,9 @@ function generateContentHash(content) {
 
 /**
  * Tailwind Extractor Plugin
+ * 
+ * This plugin runs after the loader phase to collect all extracted Tailwind classes
+ * and generate a single CSS file that gets properly injected by HtmlRspackPlugin.
  */
 class TailwindExtractorPlugin {
   constructor(options = {}) {
@@ -168,50 +171,37 @@ class TailwindExtractorPlugin {
       tempDir: options.tempDir,
       noPreflight: options.noPreflight || false,
       minify: options.minify || false,
-      cleanupTempFiles: options.cleanupTempFiles !== false // Default true
+      cleanupTempFiles: options.cleanupTempFiles !== false, // Default true
+      HtmlPlugin: options.HtmlPlugin // Pass in HtmlRspackPlugin reference
     };
     this.cssFilename = null; // Store the generated CSS filename
   }
   
   apply(compiler) {
     const pluginName = 'TailwindExtractorPlugin';
+    const isDev = compiler.options.mode === 'development';
     
-    compiler.hooks.compilation.tap(pluginName, (compilation) => {
+    // Store reference to self for inner scopes
+    const self = this;
+    
+    // Hook into thisCompilation for proper timing
+    compiler.hooks.thisCompilation.tap(pluginName, (compilation) => {
       // Get webpack/rspack sources utility
       const { sources } = compiler.webpack || require('@rspack/core');
       const { RawSource } = sources;
       
-      // Hook into HtmlRspackPlugin to inject CSS link tag (if available)
-      try {
-        const HtmlRspackPlugin = require('html-rspack-plugin');
-        if (HtmlRspackPlugin.getHooks) {
-          const hooks = HtmlRspackPlugin.getHooks(compilation);
-          
-          // Inject CSS link tag into HTML head
-          hooks.alterAssetTagGroups.tapAsync(pluginName, (data, callback) => {
-            if (this.cssFilename) {
-              // Create link tag for the CSS file
-              data.headTags.push({
-                tagName: 'link',
-                attributes: {
-                  rel: 'stylesheet',
-                  href: `/dist/${this.cssFilename}`
-                },
-                voidTag: true
-              });
-            }
-            callback(null, data);
-          });
-        }
-      } catch (e) {
-        // HtmlRspackPlugin not available, skip HTML injection
-      }
+      // Track if we've generated CSS
+      let cssGenerated = false;
+      let cssFilename = null;
       
-      // Hook into processAssets to generate CSS after all modules are processed
+      // Process assets in ADDITIONAL stage - earlier than SUMMARIZE
+      // This ensures CSS is available before HtmlRspackPlugin processes
       compilation.hooks.processAssets.tapAsync(
         {
           name: pluginName,
-          stage: compilation.constructor.PROCESS_ASSETS_STAGE_OPTIMIZE_SIZE
+          // ADDITIONAL stage is for adding new assets - perfect for our CSS
+          // This runs before HtmlRspackPlugin which typically runs at SUMMARIZE or later
+          stage: compilation.constructor.PROCESS_ASSETS_STAGE_ADDITIONAL
         },
         async (assets, callback) => {
           try {
@@ -277,15 +267,66 @@ class TailwindExtractorPlugin {
               return callback();
             }
             
-            // Generate filename with content hash for production, simple name for dev
-            const isDev = compiler.options.mode === 'development';
+            // Generate filename with content hash for production
             const filename = isDev ? 'tailwind.css' : `tailwind.${generateContentHash(css)}.css`;
-            
-            // Store filename for HTML injection
             this.cssFilename = filename;
+            cssFilename = filename;
+            cssGenerated = true;
             
-            // Emit CSS asset
-            compilation.emitAsset(filename, new RawSource(css));
+            // Emit CSS asset with proper metadata for HtmlRspackPlugin
+            const source = new RawSource(css);
+            compilation.emitAsset(filename, source, {
+              // Mark as CSS asset type for proper detection
+              minimized: this.options.minify,
+              sourceFilename: filename,
+              // This is crucial - tells HtmlRspackPlugin this is a CSS file
+              // This matches what MiniCssExtractPlugin does
+              hotModuleReplacement: false,
+              // Mark this as a CSS content type
+              contenthash: isDev ? undefined : generateContentHash(css)
+            });
+            
+            // CRITICAL: Register CSS in compilation's assets for HtmlRspackPlugin
+            // HtmlRspackPlugin looks for CSS files in different ways:
+            // 1. Through entrypoint assets
+            // 2. Through chunk files with .css extension
+            // 3. Through compilation.assets with CSS metadata
+            
+            // Method 1: Add to all entrypoints as a CSS asset
+            for (const [name, entrypoint] of compilation.entrypoints) {
+              // Get the main chunk for this entrypoint first
+              const mainChunk = entrypoint.getRuntimeChunk();
+              if (mainChunk) {
+                // Add CSS to the chunk's files
+                mainChunk.files.add(filename);
+                
+                // Also add to auxiliary files for compatibility
+                if (!mainChunk.auxiliaryFiles) {
+                  mainChunk.auxiliaryFiles = new Set();
+                }
+                mainChunk.auxiliaryFiles.add(filename);
+              }
+              
+              // Also add to all chunks in the entrypoint
+              for (const chunk of entrypoint.chunks) {
+                chunk.files.add(filename);
+                if (!chunk.auxiliaryFiles) {
+                  chunk.auxiliaryFiles = new Set();
+                }
+                chunk.auxiliaryFiles.add(filename);
+              }
+            }
+            
+            // Method 2: Add to initial chunks (what HtmlRspackPlugin processes)
+            for (const chunk of compilation.chunks) {
+              if (chunk.canBeInitial() || chunk.isOnlyInitial()) {
+                chunk.files.add(filename);
+                if (!chunk.auxiliaryFiles) {
+                  chunk.auxiliaryFiles = new Set();
+                }
+                chunk.auxiliaryFiles.add(filename);
+              }
+            }
             
             // Cleanup temp files if requested
             if (this.options.cleanupTempFiles) {
@@ -311,6 +352,46 @@ class TailwindExtractorPlugin {
           }
         }
       );
+    });
+    
+    // Hook into HtmlRspackPlugin in the compilation phase  
+    compiler.hooks.compilation.tap(pluginName, (compilation) => {
+      // Use the passed HtmlPlugin reference if available
+      const HtmlRspackPlugin = this.options.HtmlPlugin;
+      
+      // If HtmlRspackPlugin is available and supports hooks, use them
+      if (HtmlRspackPlugin && HtmlRspackPlugin.getCompilationHooks) {
+        try {
+          const hooks = HtmlRspackPlugin.getCompilationHooks(compilation);
+          
+          // Hook into beforeAssetTagGeneration to add our CSS file
+          hooks.beforeAssetTagGeneration.tapAsync(
+            pluginName,
+            (data, callback) => {
+              // If we have a CSS file, ensure it's in the assets list
+              if (self.cssFilename) {
+                // Ensure css array exists
+                if (!data.assets.css) {
+                  data.assets.css = [];
+                }
+                
+                // Add our CSS file if not already present
+                if (!data.assets.css.includes(self.cssFilename)) {
+                  // Get the publicPath from the compilation options
+                  const publicPath = compilation.outputOptions.publicPath || '';
+                  // Add the CSS file with the correct public path
+                  const cssPath = publicPath + self.cssFilename;
+                  data.assets.css.unshift(cssPath);
+                }
+              }
+              
+              callback(null, data);
+            }
+          );
+        } catch (e) {
+          // Silently continue if hooks fail
+        }
+      }
     });
   }
 }

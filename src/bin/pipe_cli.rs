@@ -210,6 +210,8 @@ fn generate_tailwind_css(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+    use tempfile::NamedTempFile;
     
     #[test]
     fn test_metadata_serialization() {
