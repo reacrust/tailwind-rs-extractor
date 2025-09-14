@@ -11,6 +11,8 @@ const os = require('os');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 
+// HtmlRspackPlugin will be found from the compiler's plugin instances
+
 class TailwindExtractorPlugin {
   constructor(options = {}) {
     // Separate options into categories
@@ -35,6 +37,15 @@ class TailwindExtractorPlugin {
         ...options.css
       },
 
+      // CSS injection options
+      injectCSS: options.injectCSS !== undefined ? options.injectCSS : 'link',
+
+      // CSP options
+      csp: {
+        nonce: options.csp?.nonce || null,
+        ...options.csp
+      },
+
       // Debug and cleanup options
       keepTempDir: options.keepTempDir || false,
       tailwindExtractorPath: options.tailwindExtractorPath || this.getDefaultBinaryPath(),
@@ -48,6 +59,10 @@ class TailwindExtractorPlugin {
     this.tempDir = null;
     this.metadataFile = null;
     this.loaderPath = path.resolve(__dirname, 'lib', 'loader.js');
+
+    // Track generated CSS for injection
+    this.generatedCssFilename = null;
+    this.generatedCssContent = null;
   }
 
   /**
@@ -155,6 +170,9 @@ class TailwindExtractorPlugin {
   applyPlugin(compiler, pluginName) {
     // Hook into the compilation
     compiler.hooks.thisCompilation.tap(pluginName, (compilation) => {
+      // Set up HTML injection if enabled
+      this.setupHtmlInjection(compiler, compilation, pluginName);
+
       // Process assets after chunks are optimized
       compilation.hooks.processAssets.tapAsync(
         {
@@ -182,11 +200,17 @@ class TailwindExtractorPlugin {
               const hash = crypto.createHash('md5').update(css).digest('hex').substring(0, 8);
               const filename = `tailwind.${hash}.css`;
 
-              // Add CSS asset to compilation
-              assets[filename] = {
-                source: () => css,
-                size: () => css.length
-              };
+              // Store for injection
+              this.generatedCssFilename = filename;
+              this.generatedCssContent = css;
+
+              // Add CSS asset to compilation (for 'link' mode or no injection)
+              if (this.options.injectCSS !== 'inline') {
+                assets[filename] = {
+                  source: () => css,
+                  size: () => css.length
+                };
+              }
 
               if (this.options.debug) {
                 console.log(`[TailwindExtractor] Generated CSS file: ${filename} (${css.length} bytes)`);
@@ -230,6 +254,129 @@ class TailwindExtractorPlugin {
           this.cleanup();
         }
       });
+    }
+  }
+
+  setupHtmlInjection(compiler, compilation, pluginName) {
+    // Only try to hook if injection is enabled
+    if (!this.options.injectCSS) {
+      return;
+    }
+
+    try {
+      // Find HtmlRspackPlugin from the compiler's plugin instances
+      const htmlPlugin = compiler.options.plugins
+        .find(plugin => plugin.constructor.name === 'HtmlRspackPlugin');
+
+      const HtmlRspackPlugin = htmlPlugin?.constructor;
+
+      if (this.options.debug) {
+        console.log('[TailwindExtractor] HtmlRspackPlugin instance found:', !!htmlPlugin);
+        console.log('[TailwindExtractor] getCompilationHooks available:', !!(HtmlRspackPlugin && HtmlRspackPlugin.getCompilationHooks));
+      }
+
+      // Use RSpack's proper hook access method
+      if (HtmlRspackPlugin && HtmlRspackPlugin.getCompilationHooks) {
+        const htmlHooks = HtmlRspackPlugin.getCompilationHooks(compilation);
+
+        if (this.options.debug) {
+          console.log('[TailwindExtractor] htmlHooks available:', !!htmlHooks);
+          console.log('[TailwindExtractor] alterAssetTags hook available:', !!(htmlHooks && htmlHooks.alterAssetTags));
+        }
+
+        if (htmlHooks && htmlHooks.alterAssetTags) {
+          htmlHooks.alterAssetTags.tapAsync(
+            pluginName,
+            (data, callback) => {
+              this.injectCssTags(data);
+              callback(null, data);
+            }
+          );
+
+          if (this.options.debug) {
+            console.log('[TailwindExtractor] Successfully hooked into HtmlRspackPlugin');
+          }
+        } else {
+          this.handleNoHtmlPlugin();
+        }
+      } else {
+        this.handleNoHtmlPlugin();
+      }
+    } catch (err) {
+      if (this.options.debug) {
+        console.warn('[TailwindExtractor] Could not hook HTML plugin:', err.message);
+      }
+      this.handleNoHtmlPlugin();
+    }
+  }
+
+  injectCssTags(data) {
+    if (!this.generatedCssContent && !this.generatedCssFilename) {
+      return;
+    }
+
+    if (this.options.injectCSS === 'link') {
+      // Inject as external stylesheet link
+      const linkTag = {
+        tagName: 'link',
+        voidTag: true,
+        attributes: {
+          href: this.generatedCssFilename,
+          rel: 'stylesheet'
+        }
+      };
+
+      // Add nonce if configured
+      if (this.options.csp?.nonce) {
+        linkTag.attributes.nonce = this.options.csp.nonce;
+      }
+
+      data.assetTags.styles.push(linkTag);
+
+      if (this.options.debug) {
+        console.log(`[TailwindExtractor] Injected CSS link: ${this.generatedCssFilename}`);
+      }
+
+    } else if (this.options.injectCSS === 'inline') {
+      // Inject as inline <style> tag
+      const styleTag = {
+        tagName: 'style',
+        voidTag: false,
+        innerHTML: this.generatedCssContent,
+        attributes: {
+          'data-source': 'tailwind-extractor'
+        }
+      };
+
+      // Add nonce if configured
+      if (this.options.csp?.nonce) {
+        styleTag.attributes.nonce = this.options.csp.nonce;
+      }
+
+      data.assetTags.styles.push(styleTag);
+
+      if (this.options.debug) {
+        console.log(`[TailwindExtractor] Injected inline CSS (${this.generatedCssContent.length} bytes)`);
+      }
+    }
+  }
+
+  handleNoHtmlPlugin() {
+    if (this.options.injectCSS === 'link') {
+      // CSS file will still be generated, just not auto-injected
+      if (this.options.debug) {
+        console.warn(
+          '[TailwindExtractor] HtmlRspackPlugin not found. CSS file generated but not injected.\n' +
+          'Add <link href="tailwind.[hash].css" rel="stylesheet"> to your HTML template.'
+        );
+      }
+    } else if (this.options.injectCSS === 'inline') {
+      if (this.options.debug) {
+        console.warn(
+          '[TailwindExtractor] HtmlRspackPlugin not found. Cannot inject inline CSS.\n' +
+          'Consider using injectCSS: "link" mode or install html-rspack-plugin.'
+        );
+      }
     }
   }
 
