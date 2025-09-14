@@ -2,7 +2,7 @@
 name = "tailwind-extractor"
 version = "0.2.0"
 edition = "2021"
-authors = ["CapitalMadrid Development Team"]
+authors = ["Alberto Valverde"]
 description = "Tailwind CSS class extraction and processing for server-side rendering"
 license = "MIT"
 
@@ -20,7 +20,10 @@ tailwind-rs = { git = "https://github.com/albertov/tailwind-rs", branch = "v3_4_
 
 # CLI and configuration
 clap = { version = "4.0", features = ["derive", "env"] }
-serde = { version = "1.0", features = ["derive"] }
+# IMPORTANT: Pinned to 1.0.224 due to swc_common v12.0.1 compatibility issue
+# swc_common tries to use serde::__private which was removed in serde 1.0.225
+# This can be updated once swc_core is updated to a version that fixes this
+serde = { version = "=1.0.224", features = ["derive"] }
 serde_json = "1.0"
 
 # JavaScript/TypeScript parsing (for transform mode)

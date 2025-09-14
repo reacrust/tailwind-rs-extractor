@@ -1,0 +1,70 @@
+{
+  "name": "tailwind-extractor",
+  "version": "0.2.0",
+  "description": "High-performance Tailwind CSS extraction and processing for RSpack/Webpack using Rust CLI",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib/",
+    "bins/",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "rspack",
+    "webpack",
+    "plugin",
+    "loader",
+    "tailwind",
+    "tailwindcss",
+    "css",
+    "extraction",
+    "rust",
+    "performance"
+  ],
+  "author": "Alberto Valverde",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "peerDependencies": {
+    "@rspack/core": ">=0.5.0",
+    "webpack": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@rspack/core": {
+      "optional": true
+    },
+    "webpack": {
+      "optional": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/reacrust/tailwind-rs-extractor"
+  },
+  "bugs": {
+    "url": "https://github.com/reacrust/tailwind-rs-extractor/issues"
+  },
+  "homepage": "https://github.com/reacrust/tailwind-rs-extractor#readme",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:list": "jest --listTests",
+    "test:debug": "jest --detectOpenHandles --verbose"
+  },
+  "devDependencies": {
+    "@rspack/core": "^1.0.0",
+    "@rspack/cli": "^1.0.0",
+    "jest": "^29.0.0",
+    "fs-extra": "^11.0.0",
+    "tmp": "^0.2.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  }
+}
