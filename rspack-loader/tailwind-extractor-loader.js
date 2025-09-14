@@ -24,9 +24,9 @@ async function findCliPath() {
   // Check common locations in order of preference
   const candidates = [
     // Debug build
-    path.resolve(__dirname, '../../target/debug/tailwind-extractor-cli'),
+    path.resolve(__dirname, '../../../target/debug/tailwind-extractor-cli'),
     // Release build
-    path.resolve(__dirname, '../../target/release/tailwind-extractor-cli'),
+    path.resolve(__dirname, '../../../target/release/tailwind-extractor-cli'),
     // System-wide installation
     'tailwind-extractor-cli'
   ];
