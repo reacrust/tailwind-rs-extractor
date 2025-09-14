@@ -48,6 +48,10 @@ enum Commands {
         /// Minify output CSS
         #[arg(long)]
         minify: bool,
+
+        /// Obfuscate Tailwind classes for production
+        #[arg(long)]
+        obfuscate: bool,
     },
 }
 
@@ -86,8 +90,8 @@ fn main() -> Result<()> {
         Commands::Transform { metadata_output, obfuscate, source_file } => {
             handle_transform_mode(metadata_output, obfuscate, source_file)
         }
-        Commands::Generate { no_preflight, minify } => {
-            handle_generate_mode(no_preflight, minify)
+        Commands::Generate { no_preflight, obfuscate, minify } => {
+            handle_generate_mode(no_preflight, obfuscate, minify)
         }
     }
 }
@@ -143,7 +147,7 @@ fn handle_transform_mode(
 }
 
 /// Generate mode: Read metadata JSON from stdin, generate CSS and output to stdout
-fn handle_generate_mode(no_preflight: bool, minify: bool) -> Result<()> {
+fn handle_generate_mode(no_preflight: bool, obfuscate: bool, minify: bool) -> Result<()> {
     // Read metadata JSON from stdin
     let mut input = String::new();
     io::stdin()
@@ -165,7 +169,7 @@ fn handle_generate_mode(no_preflight: bool, minify: bool) -> Result<()> {
     }
     
     // Generate CSS using tailwind-rs
-    let css = generate_tailwind_css(metadata.classes, no_preflight, minify)?;
+    let css = generate_tailwind_css(metadata.classes, no_preflight, minify, obfuscate)?;
     
     // Write CSS to stdout
     io::stdout()
@@ -180,6 +184,7 @@ fn generate_tailwind_css(
     classes: Vec<String>,
     no_preflight: bool,
     _minify: bool, // Note: minify isn't directly supported by tailwind-rs yet
+    obfuscate: bool, // Note: minify isn't directly supported by tailwind-rs yet
 ) -> Result<String> {
     let mut builder = TailwindBuilder::default();
     
@@ -189,7 +194,7 @@ fn generate_tailwind_css(
     // Process each class through the builder
     for class in &classes {
         // Try to trace the class - silently ignore failures for unknown classes
-        let _ = builder.trace(class, false);
+        let _ = builder.trace(class, obfuscate);
     }
     
     // Generate the CSS bundle

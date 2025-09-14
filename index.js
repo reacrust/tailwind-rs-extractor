@@ -34,6 +34,7 @@ class TailwindExtractorPlugin {
         noPreflight: options.css?.noPreflight || options.noPreflight || false,
         minify: options.css?.minify !== undefined ? options.css.minify :
                 (options.minify !== undefined ? options.minify : process.env.NODE_ENV === 'production'),
+        obfuscate: options.transform?.obfuscate || options.obfuscate || false,
         ...options.css
       },
 
@@ -387,6 +388,9 @@ class TailwindExtractorPlugin {
       // Add CSS generation options
       if (this.options.css.minify) {
         args.push('--minify');
+      }
+      if (this.options.css.obfuscate) {
+        args.push('--obfuscate');
       }
       if (this.options.css.noPreflight) {
         args.push('--no-preflight');
