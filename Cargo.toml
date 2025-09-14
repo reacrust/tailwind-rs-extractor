@@ -16,7 +16,7 @@ path = "src/bin/pipe_cli.rs"
 
 [dependencies]
 # Core Tailwind processing
-tailwind-rs = { path = "../../vendor/tailwind-rs/projects/tailwind-rs" }
+tailwind-rs = { git = "https://github.com/albertov/tailwind-rs", branch = "v3_4_vibes" }
 
 # CLI and configuration
 clap = { version = "4.0", features = ["derive", "env"] }
